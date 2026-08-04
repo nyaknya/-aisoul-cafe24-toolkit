@@ -4,6 +4,7 @@
 
 - `outputs/skin/` — 스킨에 올릴 파일. 설치와 사용법은 [outputs/README.md](outputs/README.md)
 - `outputs/docs/` — 같은 코드에 주석을 상세히 단 것. 읽는 용도
+- [BACKLOG.md](BACKLOG.md) — 키트에 추가 예정인 공통 기능과 확인해야 할 것들
 
 아래는 **카페24에서 프론트 작업할 때 알아야 하는 것들**만 정리한 것이다.
 
