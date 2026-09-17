@@ -110,7 +110,7 @@ window.FRONT = window.FRONT || {};
     /* --- 흐름 제어 -------------------------------------------- */
 
     // 결과를 한 번만 계산해서 재사용. 실패하면 다음 호출에서 다시 시도한다.
-    //   const loadCategories = util.once(() => FRONT.api.cafe24Public.get('/api/v2/categories'));
+    //   const loadCategories = util.once(() => FRONT.api.front.get('/api/v2/categories'));
     //   loadCategories().then(...)   // 두 번째부터는 요청 안 나감
     once(fn) {
       let has = false;
@@ -205,8 +205,7 @@ window.FRONT = window.FRONT || {};
 
        한 번에 하나만 띄운다. 여러 개를 쌓으면 어느 것이 방금 한 동작의 결과인지
        알기 어렵고, 연타했을 때 화면이 토스트로 덮인다 */
-    toast(message, options) {
-      const opt = options || {};
+    toast(message, opt = {}) {
       const type = TOAST_ICON[opt.type] ? opt.type : 'success';   // 모르는 type 은 success 로
 
       clearTimeout(toastTimer);

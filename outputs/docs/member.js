@@ -60,7 +60,9 @@ window.FRONT = window.FRONT || {};
       .catch(() => ({ ready: true, guest: true }));
   };
 
-  const saveCookie = (customer) => {
+  // 확정된 회원을 메모리와 쿠키에 담는다
+  const remember = (customer) => {
+    member.info = customer;
     const slim = {};
     FIELDS.forEach((k) => {
       if (customer[k] != null) slim[k] = customer[k];
@@ -91,8 +93,7 @@ window.FRONT = window.FRONT || {};
           // 정상
           if (customer?.member_id) {
             verified = true;
-            member.info = customer;
-            saveCookie(customer);
+            remember(customer);
             return resolve(customer);
           }
 
@@ -133,18 +134,19 @@ window.FRONT = window.FRONT || {};
     getCustomer().then(({ ready, guest, customer }) => {
       // SDK가 아직 없다 = 판단 불가. 캐시를 건드리지 않고 다음 기회로 미룬다.
       // 여기서 캐시를 지우면 SDK가 늦게 뜬 몰에서 멀쩡한 회원이 매번 떨어져 나간다
-      if (!ready) { verified = false; return; }
+      // 로그인인데 member_id가 아직 비어 있는 과도기도 마찬가지로 판단 불가
+      if (!ready || (!guest && !customer?.member_id)) { verified = false; return; }
 
-      const actual = guest ? null : (customer && customer.member_id) || null;
-
-      // 로그인인데 member_id가 아직 비어 있는 과도기. 역시 판단 불가
-      if (!guest && !actual) { verified = false; return; }
-
+      const actual = guest ? null : customer.member_id;
       if (actual === cachedId) return;
 
       FRONT.util.log('member 캐시 불일치 — 캐시:', cachedId, '실제:', actual);
       member.clear();           // clear()는 verified 를 건드리지 않는다 — 재검증이 루프가 되지 않는다
-      if (actual) fromSdk();    // 계정이 바뀐 경우 새 회원으로 다시 채운다
+      // 계정이 바뀐 경우 방금 받은 새 회원으로 채운다. fromSdk() 를 부르면 같은 조회가 한 번 더 나간다
+      if (actual) {
+        remember(customer);
+        promise = Promise.resolve(customer);
+      }
     });
   };
 

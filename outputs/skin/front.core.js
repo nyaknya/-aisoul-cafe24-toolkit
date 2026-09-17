@@ -170,8 +170,7 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
     //   FRONT.util.toast('쿠폰이 발급되었어요')
     //   FRONT.util.toast('이미 발급받은 쿠폰이에요', { type: 'error' })
     // 한 번에 하나만 뜬다 — 새로 부르면 앞의 것을 교체한다
-    toast(message, options) {
-      const opt = options || {};
+    toast(message, opt = {}) {
       const type = TOAST_ICON[opt.type] ? opt.type : 'success';   // 모르는 type 은 success 로
 
       clearTimeout(toastTimer);
@@ -214,7 +213,7 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
   // 그 외 옵션(timeout, withCredentials 등)은 axios로 그대로 넘어간다
   const create = ({ name = 'API', baseURL, headers, token, onUnauthorized, ...axiosOpts } = {}) => {
     let inst = null;
-    let auth = token || null;
+    let auth = token;
     let refreshing = null;   // 진행 중인 토큰 갱신. 401이 여러 개 와도 갱신은 하나만 나간다
 
     const client = () => {
@@ -239,6 +238,7 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
 
       inst.interceptors.request.use((cfg) => {
         const t = resolve(auth);
+        cfg.__token = t;   // 어떤 토큰으로 나갔는지. 401 때 이미 갱신됐는지 가린다
         if (t) cfg.headers.Authorization = `Bearer ${t}`;
         return cfg;
       });
@@ -257,6 +257,9 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
             return Promise.reject(err);
           }
           cfg.__retried = true;
+          // 이 요청이 나간 뒤 토큰이 이미 바뀌었다 = 갱신이 먼저 끝났다. 새 토큰으로 다시 보내기만 한다.
+          // 늦게 온 401 마다 갱신을 또 부르면 이미 쓴 refreshToken 으로 나간다
+          if (!refreshing && cfg.__token !== resolve(auth)) return inst.request(cfg);
           if (!refreshing) {
             refreshing = onUnauthorized();
             // 끝나면 놓아준다. 성공·실패 둘 다 여기서 받아야 다음 401이 다시 갱신할 수 있다
@@ -393,16 +396,52 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
     return entry;
   };
 
-  // _run(무엇을 그릴까)과 has(스켈레톤을 띄울까)가 같은 기준을 써야 한다 — 한 곳에만 둔다
+  // get(무엇을 그릴까)과 has(스켈레톤을 띄울까)가 같은 기준을 써야 한다 — 한 곳에만 둔다
   const isExpired = (entry, maxAge) => !!maxAge && Date.now() - entry.time >= maxAge;
 
   // 바뀌었는지 비교할 때 쓸 지문. ignore에 준 이름은 깊이 상관없이 빼고 본다.
   // 요청할 때마다 값이 달라지는 필드(조회수처럼 우리 조회로 값이 올라가는 것)가
   // 섞여 있으면, 내용이 그대로인데도 매번 다시 그리게 된다
   const fingerprint = (value, ignore) =>
-    (!ignore || !ignore.length)
-      ? JSON.stringify(value)
-      : JSON.stringify(value, (k, v) => (ignore.indexOf(k) > -1 ? undefined : v));
+    JSON.stringify(value, ignore?.length ? (k, v) => (ignore.includes(k) ? undefined : v) : undefined);
+
+  // 같은 키로 이미 나간 요청이 있으면 그것을 돌려준다.
+  // clear() 가 inflight 에서 뺀 요청은 돌아와도 캐시에 쓰지 않는다 — 지운 값이 되살아난다
+  const refetch = (key, fetcher) => {
+    if (inflight[key]) return inflight[key];
+    const p = fetcher()
+      .then((data) => {
+        if (inflight[key] === p) {
+          memory[key] = { data, time: Date.now() };
+          writeSession(key, memory[key]);
+        }
+        return data;
+      })
+      .finally(() => { if (inflight[key] === p) delete inflight[key]; });
+    p.notified = new Set();   // 이 응답에 이미 매단 onRevalidate 들
+    return (inflight[key] = p);
+  };
+
+  /* 뒤에서 새로 받아, 화면에 떠 있는 것(prev)과 다를 때만 onRevalidate 를 부른다.
+     prev 가 없으면(첫 조회가 실패해 화면이 비어 있다) 받는 대로 부른다.
+
+     한 응답에 같은 onRevalidate 는 한 번만 매단다. 탭 복귀 때 visibilitychange 와
+     focus 가 같이 뜨거나, 페이지 로드 때 나간 재검증에 복귀가 합류하면 같은 요청에
+     두 번 매달려 두 번 그려진다. 부수고 다시 만드는 렌더(스와이퍼 등)는 그러면 깨진다 */
+  const revalidate = (key, fetcher, prev, { onRevalidate, isValid, ignore }) => {
+    const p = refetch(key, fetcher);
+    if (!onRevalidate) return p.catch(() => {});
+    if (p.notified.has(onRevalidate)) return p;
+    p.notified.add(onRevalidate);
+    return p
+      .then((fresh) => {
+        // 응답이 늦게 왔는데 그 사이 화면이 바뀌었으면 그리지 않는다
+        if (isValid && !isValid()) return;
+        if (prev && fingerprint(fresh, ignore) === fingerprint(prev.data, ignore)) return;
+        onRevalidate(fresh);
+      })
+      .catch(() => {}); // 백그라운드 실패는 조용히 넘긴다
+  };
 
   /* 화면에 살아 있는 조회들.
      탭에 돌아왔을 때 무엇을 다시 확인할지 알아야 한다.
@@ -426,67 +465,35 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
       const { ttl = 30000, maxAge = MAX_AGE } = opts;
       const o = { ...opts, ttl, maxAge };
       if (o.onRevalidate) live.set(o.onRevalidate, { key, fetcher, opts: o });
-      return cache._run(key, fetcher, o);
-    },
 
-    _run(key, fetcher, { ttl, maxAge, onRevalidate, isValid, ignore }) {
       const entry = readEntry(key);
-
-      const refetch = () => {
-        if (inflight[key]) return inflight[key];
-        inflight[key] = fetcher()
-          .then((data) => {
-            memory[key] = { data, time: Date.now() };
-            writeSession(key, memory[key]);
-            delete inflight[key];
-            return data;
-          })
-          .catch((err) => {
-            delete inflight[key];
-            throw err;
-          });
-        return inflight[key];
-      };
-
-      if (!entry) return refetch();
+      if (!entry) return refetch(key, fetcher);
 
       // 너무 오래됐다 — 그리지 않고 기다린다.
       // 못 받아오면 그때 가서 있는 것이라도 쓴다
       if (isExpired(entry, maxAge)) {
         FRONT.util.log('캐시가 maxAge 를 넘겨 새로 받는다:', key);
-        return refetch().catch(() => entry.data);
+        return refetch(key, fetcher).catch(() => entry.data);
       }
 
-      if (Date.now() - entry.time >= ttl) {
-        refetch()
-          .then((fresh) => {
-            if (!onRevalidate) return;
-            // 응답이 늦게 왔는데 그 사이 화면이 바뀌었으면 그리지 않는다
-            if (isValid && !isValid()) return;
-            if (fingerprint(fresh, ignore) === fingerprint(entry.data, ignore)) return;
-            onRevalidate(fresh);
-          })
-          .catch(() => {}); // 백그라운드 실패는 조용히 넘긴다. 화면엔 이미 캐시가 떠 있다
-      }
+      if (Date.now() - entry.time >= ttl) revalidate(key, fetcher, entry, o);
       return Promise.resolve(entry.data);
     },
 
     /* 화면에 살아 있는 조회들을 다시 확인한다.
-       ttl이 안 지난 것은 _run이 알아서 그냥 캐시를 돌려주고 끝나므로,
-       여기서 나이를 따로 볼 필요가 없다. 같은 키로 이미 나간 요청이 있으면
-       inflight이 합쳐준다 — 이벤트가 겹쳐 들어와도 요청은 한 번만 나간다 */
+       maxAge 는 보지 않는다 — 그건 첫 렌더에서 '무엇을 그릴까'를 정하는 규칙이고,
+       여기선 화면에 이미 무언가 떠 있다. 캐시가 아예 없는 것(첫 조회가 실패한 것)도
+       다시 받아 그린다 — online 복귀가 만회하려는 게 바로 그 경우다.
+       같은 키로 이미 나간 요청이 있으면 inflight 이 합쳐준다 */
     revalidateAll() {
       let n = 0;
       live.forEach(({ key, fetcher, opts }) => {
         // 호출부가 '아직 이 화면이 맞나'를 판단할 수 있으면 존중한다
         if (opts.isValid && !opts.isValid()) return;
+        const entry = readEntry(key);
+        if (entry && Date.now() - entry.time < opts.ttl) return;
         n++;
-        // maxAge 는 첫 렌더에서 '무엇을 그릴까'를 정하는 규칙이다.
-        // 여기선 화면에 이미 내용이 떠 있으므로 꺼야 한다 — 켜두면 _run 이
-        // 그냥 refetch 만 하고 onRevalidate 를 안 불러, 오래 자리를 비웠던
-        // 사람일수록 화면이 안 바뀐다
-        cache._run(key, fetcher, { ...opts, maxAge: 0 })
-          .catch(() => {});   // 화면엔 이미 캐시가 떠 있다. 조용히 넘긴다
+        revalidate(key, fetcher, entry, opts);
       });
       FRONT.util.log('재검증 대상 ' + n + '건');
       return n;
@@ -494,16 +501,19 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
 
     // 키를 주면 하나만, 안 주면 전부.
     // 살아 있는 조회 목록도 같이 정리한다 — 안 그러면 비워놓은 캐시를
-    // 다음 탭 복귀 때 유령 등록이 도로 채운다
+    // 다음 탭 복귀 때 유령 등록이 도로 채운다.
+    // 나가 있는 요청도 놓는다 — 돌아와서 옛 값을 다시 쓰지 않게, 다음 get() 이 거기 합류하지 않게
     clear(key) {
       if (key) {
         delete memory[key];
+        delete inflight[key];
         try { sessionStorage.removeItem(PREFIX + key); } catch (e) {}
         live.forEach((v, fn) => { if (v.key === key) live.delete(fn); });
         return;
       }
       live.clear();
       Object.keys(memory).forEach((k) => delete memory[k]);
+      Object.keys(inflight).forEach((k) => delete inflight[k]);
       try {
         Object.keys(sessionStorage)
           .filter((k) => k.indexOf(PREFIX) === 0)
@@ -515,10 +525,10 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
     /* '지금 그릴 수 있는 값이 있나'를 묻는 것이다. 호출부는 전부
        if (!has(key)) 스켈레톤 으로 쓴다.
 
-       maxAge 를 넘긴 캐시는 _run 이 그리지 않고 새로 받을 때까지 기다린다.
+       maxAge 를 넘긴 캐시는 get 이 그리지 않고 새로 받을 때까지 기다린다.
        그런데 여기서 true 를 주면 호출부가 스켈레톤을 감춰버려, 정작 기다리는
        동안 빈 자리가 남는다 — 스켈레톤이 가장 필요한 순간에 없어지는 셈이다.
-       그래서 나이도 같이 본다. 기준은 _run 과 같아야 하므로 인자로 받는다 */
+       그래서 나이도 같이 본다. 기준은 get 과 같아야 하므로 인자로 받는다 */
     has(key, maxAge = MAX_AGE) {
       const entry = readEntry(key);
       return !!entry && !isExpired(entry, maxAge);
@@ -544,22 +554,12 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
                          스크립트가 처음부터 도는 것과 같다. 언젠가 헤더가 바뀌면
                          저절로 맞게 도록 남겨둔다
 
-     visibilitychange 와 focus 는 복귀 때 같이 뜬다. inflight 이 요청은 하나로
-     합쳐주지만 콜백까지 합쳐주진 않는다 — _run 이 그 하나의 약속에 저마다
-     .then(onRevalidate) 을 매달아서, 요청 한 번에 onRevalidate 가 두 번 불렸다.
-     다시 그리며 이전 것을 부수는 렌더(스와이퍼를 destroy 하고 다시 만드는 것 등)는
-     두 번 돌면 깨진다. 그래서 요청이 아니라 트리거 쪽에서 합친다 */
-  const WAKE_MERGE = 50;   // 같은 복귀에서 온 이벤트끼리만 묶일 만큼 짧게
-  let wakeTimer = null;
-
+     visibilitychange 와 focus 는 복귀 때 같이 뜬다. 따로 합치지 않는다 —
+     요청은 inflight 이, 콜백은 revalidate 가 응답당 한 번으로 합친다 */
   const wake = (why) => {
     if (document.visibilityState === 'hidden') return;
-    clearTimeout(wakeTimer);
-    wakeTimer = setTimeout(() => {
-      wakeTimer = null;
-      FRONT.util.log('재검증 트리거:', why);
-      cache.revalidateAll();
-    }, WAKE_MERGE);
+    FRONT.util.log('재검증 트리거:', why);
+    cache.revalidateAll();
   };
 
   document.addEventListener('visibilitychange', () => {
@@ -592,6 +592,13 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
       .catch(() => ({ ready: true, guest: true }));
   };
 
+  const remember = (customer) => {
+    member.info = customer;
+    const slim = {};
+    FIELDS.forEach((k) => { if (customer[k] != null) slim[k] = customer[k]; });
+    FRONT.util.cookie.setJSON(COOKIE_KEY, slim, COOKIE_MIN);
+  };
+
   const fromSdk = () => {
     if (promise) return promise;
 
@@ -611,10 +618,7 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
 
           if (customer?.member_id) {
             verified = true;
-            member.info = customer;
-            const slim = {};
-            FIELDS.forEach((k) => { if (customer[k] != null) slim[k] = customer[k]; });
-            FRONT.util.cookie.setJSON(COOKIE_KEY, slim, COOKIE_MIN);
+            remember(customer);
             return resolve(customer);
           }
           if (++attempts < MAX_RETRY) {
@@ -642,19 +646,19 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
     verified = true;
 
     getCustomer().then(({ ready, guest, customer }) => {
-      // SDK가 없다 = 판단 불가. 캐시를 건드리지 않고 다음 기회로 미룬다
-      if (!ready) { verified = false; return; }
+      // SDK가 없거나, 로그인인데 member_id가 아직 비어 있는 과도기 = 판단 불가.
+      // 캐시를 건드리지 않고 다음 기회로 미룬다
+      if (!ready || (!guest && !customer?.member_id)) { verified = false; return; }
 
-      const actual = guest ? null : (customer && customer.member_id) || null;
-
-      // 로그인인데 member_id가 아직 비어 있는 과도기. 역시 판단 불가
-      if (!guest && !actual) { verified = false; return; }
-
+      const actual = guest ? null : customer.member_id;
       if (actual === cachedId) return;
 
       FRONT.util.log('member 캐시 불일치 — 캐시:', cachedId, '실제:', actual);
       member.clear();           // verified 는 건드리지 않는다 — 이 페이지에서 재검증이 돌지 않는다
-      if (actual) fromSdk();    // 계정이 바뀐 경우 새 회원으로 다시 채운다
+      if (actual) {             // 계정이 바뀐 경우 방금 받은 새 회원으로 채운다
+        remember(customer);
+        promise = Promise.resolve(customer);
+      }
     });
   };
 
@@ -742,7 +746,7 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
       entry.fn();
     } catch (err) {
       // 하나가 죽어도 나머지는 계속 돈다
-      console.error(`[FRONT.page${typeof entry.when === 'string' ? ' ' + entry.when : ''}]`, err);
+      FRONT.util.logError(`FRONT.page${typeof entry.when === 'string' ? ' ' + entry.when : ''}`, err);
     }
   };
 

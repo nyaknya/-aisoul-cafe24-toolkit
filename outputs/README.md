@@ -230,7 +230,7 @@ if (!FRONT.cache.has(KEY)) $list.html(FRONT.util.skeleton(8, 'card-skeleton', BL
 
 FRONT.cache.get(KEY, () => FRONT.api.middleware.get('/api/v1/products').then((r) => r.data), {
   ttl: 30000,                          // 이 시간이 지났으면 뒤에서 새로 받는다
-  onRevalidate: (fresh) => render(fresh),
+  onRevalidate: render,                // 이름 있는 함수로 — 아래 주의 참고
 }).then(render);
 ```
 

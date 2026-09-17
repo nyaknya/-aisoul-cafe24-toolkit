@@ -19,7 +19,7 @@ window.FRONT = window.FRONT || {};
   //   인스턴스를 꺼내 defaults를 직접 만지는 상황이 생긴다.
   const create = ({ name = 'API', baseURL, headers, token, onUnauthorized, ...axiosOpts } = {}) => {
     let inst = null;
-    let auth = token || null;
+    let auth = token;
 
     // 진행 중인 토큰 갱신. 401을 동시에 여러 개 받아도 갱신은 한 번만 나가게 한다
     let refreshing = null;
@@ -48,6 +48,7 @@ window.FRONT = window.FRONT || {};
 
       inst.interceptors.request.use((cfg) => {
         const t = resolve(auth);
+        cfg.__token = t;   // 어떤 토큰으로 나갔는지. 401 때 이미 갱신됐는지 가린다
         if (t) cfg.headers.Authorization = `Bearer ${t}`;
         return cfg;
       });
@@ -80,6 +81,11 @@ window.FRONT = window.FRONT || {};
             return Promise.reject(err);
           }
           cfg.__retried = true;
+
+          // 이 요청이 나간 뒤 토큰이 이미 바뀌었다 = 앞선 갱신이 끝났다. 새 토큰으로 다시 보내기만 한다.
+          // refreshing 은 갱신이 끝나면 비워지므로 그것만으로는 합쳐지지 않는다 — 옛 토큰으로 나갔던
+          // 느린 요청의 401 이 뒤늦게 오면 이미 쓴 refreshToken 으로 갱신이 한 번 더 나간다
+          if (!refreshing && cfg.__token !== resolve(auth)) return inst.request(cfg);
 
           if (!refreshing) {
             refreshing = onUnauthorized();

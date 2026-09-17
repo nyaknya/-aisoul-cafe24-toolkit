@@ -28,7 +28,7 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
       entry.fn();
     } catch (err) {
       // 한 페이지 스크립트가 죽어도 나머지는 계속 돌게 한다
-      console.error(`[FRONT.page${typeof entry.when === 'string' ? ' ' + entry.when : ''}]`, err);
+      FRONT.util.logError(`FRONT.page${typeof entry.when === 'string' ? ' ' + entry.when : ''}`, err);
     }
   };
 
