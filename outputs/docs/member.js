@@ -53,7 +53,7 @@ window.FRONT = window.FRONT || {};
   const getCustomer = () =>
     FRONT.api.sdk
       .call('getCustomerInfo')
-      .then((res) => (res?.error?.code === 403 ? { ready: true, guest: true } : { ready: true, customer: res?.customer }))
+      .then((res) => (Number(res?.error?.code) === 403 ? { ready: true, guest: true } : { ready: true, customer: res?.customer }))
       .catch((err) => (err?.notReady ? { ready: false } : { ready: true, guest: true }));
 
   // 확정된 회원을 메모리와 쿠키에 담는다

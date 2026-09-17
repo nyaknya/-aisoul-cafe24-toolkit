@@ -175,8 +175,12 @@ window.FRONT = window.FRONT || {};
       // 못 받아오면 그때 가서 있는 것이라도 쓴다
       if (isExpired(entry, maxAge)) {
         FRONT.util.log('캐시가 maxAge 를 넘겨 새로 받는다:', key);
-        // 기다리는 사이 clear() 가 지웠으면 지운 값으로 돌아가지 않는다
-        return awaited().catch((err) => { if (readEntry(key) === entry) return entry.data; throw err; });
+        // 지금 캐시에 있는 값으로 물러선다 — 그 사이 새로 받았으면 새 값, clear() 로 지워졌으면 에러
+        return awaited().catch((err) => {
+          const cur = readEntry(key);
+          if (cur) return cur.data;
+          throw err;
+        });
       }
 
       if (isStale(entry, ttl)) revalidate(key, fetcher, entry, o);
