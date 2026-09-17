@@ -13,7 +13,7 @@ window.FRONT = window.FRONT || {};
   // opts: { name, baseURL, headers, token, onUnauthorized, ...그 외 axios 옵션 }
   //   baseURL / headers 는 함수로 넘기면 첫 요청 때 평가된다 (config 로드 순서 무관)
   //   token 은 문자열 또는 함수. 있으면 Authorization: Bearer 로 붙는다
-  //   onUnauthorized 는 401 을 만났을 때 부를 갱신 함수. Promise 를 돌려줘야 한다
+  //   onUnauthorized 는 401 을 만났을 때 부를 갱신 함수. 갱신이 끝날 때 resolve 하는 Promise 를 돌려준다(값을 안 돌려줘도 터지지는 않는다)
   //   나머지(timeout, withCredentials, responseType …)는 axios로 그대로 전달된다.
   //   키트가 아는 옵션만 화이트리스트로 받으면, 옵션 하나 쓰려고 raw()로
   //   인스턴스를 꺼내 defaults를 직접 만지는 상황이 생긴다.
@@ -88,7 +88,8 @@ window.FRONT = window.FRONT || {};
           if (cfg.__token !== resolve(auth)) return inst.request(cfg);
 
           if (!refreshing) {
-            refreshing = onUnauthorized();
+            // 훅이 Promise 를 안 돌려주거나 바로 던져도 원래 401 로 떨어지게 감싼다 — 안 감싸면 TypeError 가 올라간다
+            refreshing = Promise.resolve().then(onUnauthorized);
             // 성공·실패 둘 다 여기서 받아 놓아준다. 실패를 안 받으면 처리되지 않은
             // 거절로 남고, 놓아주지 않으면 다음 401 이 영영 갱신을 못 한다
             refreshing.then(() => { refreshing = null; }, () => { refreshing = null; });
@@ -173,6 +174,10 @@ window.FRONT = window.FRONT || {};
     }),
   };
 
+  // SDK 에 닿기도 전에 난 실패(SDK 없음 · 메서드 없음 · init 오류)에 붙인다.
+  // SDK 가 실제로 답한 실패와 갈라야 하는 쪽이 있다 — 회원 조회는 앞의 것을 비회원으로 보면 안 된다
+  const notReady = (err) => Object.assign(err instanceof Error ? err : new Error(String(err)), { notReady: true });
+
   const noSdk = () =>
     new Error('[FRONT.api.sdk] CAFE24API가 없습니다. 카페24 앱 스크립트가 로드됐는지 확인하세요.');
 
@@ -197,11 +202,13 @@ window.FRONT = window.FRONT || {};
     // 마지막 인자가 콜백인 SDK 메서드는 전부 이걸로 부른다
     //   FRONT.api.sdk.call('addCurrentProductToCart', mallId, time, appKey, memberId, hmac)
     call(method, ...args) {
-      if (typeof CAFE24API === 'undefined') return Promise.reject(noSdk());
-      if (typeof CAFE24API[method] !== 'function') {
-        return Promise.reject(new Error(`[FRONT.api.sdk] CAFE24API.${method}() 가 없습니다.`));
+      try {
+        if (typeof CAFE24API === 'undefined') throw noSdk();
+        if (typeof CAFE24API[method] !== 'function') throw new Error(`[FRONT.api.sdk] CAFE24API.${method}() 가 없습니다.`);
+        api.sdk.init();
+      } catch (e) {
+        return Promise.reject(notReady(e));   // SDK 에 닿기도 전의 실패
       }
-      try { api.sdk.init(); } catch (e) { return Promise.reject(e); }
       return FRONT.util.toPromise((cb) => CAFE24API[method](...args, cb));
     },
 

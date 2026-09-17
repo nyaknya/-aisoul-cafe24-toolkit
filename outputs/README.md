@@ -141,7 +141,7 @@ FRONT.page(() => location.pathname.startsWith('/order/'), function () { ... });
 | `MIDDLEWARE_BASE` | 자체 백엔드 주소 |
 | `SKIN_BASE` | 스킨 경로 접두사. `FRONT.util.url()` 이 쓴다 |
 | `TOKEN` | 미들웨어에 붙일 토큰을 돌려주는 함수. 없으면 헤더 없이 나간다 |
-| `ON_UNAUTHORIZED` | 401 일 때 부를 토큰 갱신 함수(Promise). 없으면 401 이 그대로 올라간다 |
+| `ON_UNAUTHORIZED` | 401 일 때 부를 토큰 갱신 함수(Promise). 없거나 갱신이 실패하면 401 이 그대로 올라간다 |
 | `DEBUG` | 주소에 `?debug=1` 붙이면 true |
 | `CAFE24_BASE` | `MALL_ID` 에서 자동 유도 |
 
@@ -306,6 +306,9 @@ FRONT.member.clear()   // 직접 부를 일은 드물다 (아래)
 카페24 SDK는 로그인 상태인데도 초기에 `member_id` 없이 빈 값을 주는 경우가 있어서
 1초 간격 10회까지 다시 묻는다. 비로그인(403)은 재시도하지 않는다.
 
+**비회원으로 확정하는 건 SDK 가 실제로 답했을 때뿐이다.** SDK 가 없거나 초기화가 실패하면(`CLIENT_ID` 누락 등)
+판단을 미루고 캐시를 건드리지 않는다 — 설정 실수 하나로 전 회원이 로그아웃된 것처럼 보이지 않게.
+
 ### 로그아웃은 코어가 잡는다
 
 쿠키가 30분이라 로그아웃해도 그 시간 동안 회원으로 보인다. 세 겹으로 막는다.
@@ -347,7 +350,7 @@ formatNumber(1000)                  // '1,000'
 formatDate('2026-08-04T12:00:00')   // '2026.08.04'
 escapeHtml(v)                       // html 넣기 전 필수
 query('cate_no')                    // 주소의 ?cate_no 값
-url('/pages/list.html')             // config.SKIN_BASE 접두사를 붙인다
+url('/pages/list.html')             // config.SKIN_BASE 접두사를 붙인다. https: · // · # · ? 로 시작하면 그대로
 parseDate('2026-08-16 15:29:36')    // ms. 사파리도 읽는다. new Date(s) 를 직접 쓰지 않는다
 img(url, alt, 'thumb', ' loading="lazy"')   // url 이 비면 투명 1px + is-noimg
 BLANK_IMG                           // 템플릿 <img> 에 직접 넣을 빈 이미지

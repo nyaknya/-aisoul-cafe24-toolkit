@@ -87,12 +87,15 @@ window.FRONT = window.FRONT || {};
     JSON.stringify(value, ignore?.length ? (k, v) => (ignore.includes(k) ? undefined : v) : undefined);
 
   // 같은 키로 이미 나간 요청이 있으면 그것을 돌려준다.
-  // clear() 가 inflight 에서 뺀 요청은 돌아와도 캐시에 쓰지 않는다 — 지운 값이 되살아난다
+  // 돌아왔을 때 inflight 에서 빠져 있으면 clear() 가 버린 요청이다. 캐시에 쓰지 않고(지운 값이 되살아난다)
+  // p.cancelled 로 남겨, 뒤에 매달린 revalidate · get 도 그리지 않게 한다
   const refetch = (key, fetcher) => {
     if (inflight[key]) return inflight[key];
     const p = fetcher()
       .then((data) => {
-        if (inflight[key] === p) {
+        if (inflight[key] !== p) {
+          p.cancelled = true;
+        } else {
           memory[key] = { data, time: Date.now() };
           writeSession(key, memory[key]);
         }
@@ -117,6 +120,8 @@ window.FRONT = window.FRONT || {};
     p.notified.add(onRevalidate);
     return p
       .then((fresh) => {
+        // clear() 가 버린 요청이다. 늦게 와서 새로 받은 화면을 덮지 않게
+        if (p.cancelled) return;
         // 응답이 늦게 왔는데 그 사이 화면이 바뀌었으면 그리지 않는다
         if (isValid && !isValid()) return;
         // 먼저 매달린 뒤 get() 이 같은 요청을 기다려 돌려줬다 — 그쪽이 그리므로 여기선 넘긴다
@@ -155,7 +160,12 @@ window.FRONT = window.FRONT || {};
       const awaited = () => {
         const p = refetch(key, fetcher);
         if (o.onRevalidate) { p.notified.add(o.onRevalidate); p.direct.add(o.onRevalidate); }
-        return p;
+        return p.then((data) => {
+          if (!p.cancelled) return data;
+          // 기다리는 사이 clear() 가 이 요청을 버렸다. 그 뒤에 받은 값이 있으면 그것을, 없으면 다시 기다린다
+          const fresh = readEntry(key);
+          return fresh ? fresh.data : awaited();
+        });
       };
 
       const entry = readEntry(key);
@@ -165,7 +175,8 @@ window.FRONT = window.FRONT || {};
       // 못 받아오면 그때 가서 있는 것이라도 쓴다
       if (isExpired(entry, maxAge)) {
         FRONT.util.log('캐시가 maxAge 를 넘겨 새로 받는다:', key);
-        return awaited().catch(() => entry.data);
+        // 기다리는 사이 clear() 가 지웠으면 지운 값으로 돌아가지 않는다
+        return awaited().catch((err) => { if (readEntry(key) === entry) return entry.data; throw err; });
       }
 
       if (isStale(entry, ttl)) revalidate(key, fetcher, entry, o);

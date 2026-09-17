@@ -138,7 +138,8 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
     url(path) {
       const base = String(FRONT.config?.SKIN_BASE || '').replace(/^\/|\/$/g, '');
       const p = String(path || '');
-      if (!base) return p;
+      // 외부 주소(https: · //cdn) · mailto: · javascript: · #top · ?q= 는 그대로 둔다
+      if (!base || !p || /^([a-z][a-z\d+.-]*:|\/\/|[#?])/i.test(p)) return p;
       const pre = '/' + base;
       // 이미 접두사가 붙어 있으면 또 붙이지 않는다. 겹치면 404가 난다
       if (p === pre || p.indexOf(pre + '/') === 0) return p;
@@ -273,7 +274,8 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
           // 늦게 온 401 마다 갱신을 또 부르면 이미 쓴 refreshToken 으로 나간다
           if (cfg.__token !== resolve(auth)) return inst.request(cfg);
           if (!refreshing) {
-            refreshing = onUnauthorized();
+            // 훅이 Promise 를 안 돌려주거나 바로 던져도 원래 401 로 떨어지게 감싼다
+            refreshing = Promise.resolve().then(onUnauthorized);
             // 끝나면 놓아준다. 성공·실패 둘 다 여기서 받아야 다음 401이 다시 갱신할 수 있다
             refreshing.then(() => { refreshing = null; }, () => { refreshing = null; });
           }
@@ -330,6 +332,10 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
     }),
   };
 
+  // SDK 에 닿기도 전에 난 실패(SDK 없음 · 메서드 없음 · init 오류)에 붙인다.
+  // SDK 가 실제로 답한 실패와 갈라야 하는 쪽이 있다 — 회원 조회는 앞의 것을 비회원으로 보면 안 된다
+  const notReady = (err) => Object.assign(err instanceof Error ? err : new Error(String(err)), { notReady: true });
+
   const noSdk = () =>
     new Error('[FRONT.api.sdk] CAFE24API가 없습니다. 카페24 앱 스크립트가 로드됐는지 확인하세요.');
 
@@ -346,11 +352,13 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
     //   sdk.call('addCurrentProductToCart', mallId, time, appKey, memberId, hmac)
     // 실패는 항상 reject로 온다. .catch() 하나만 달면 된다
     call(method, ...args) {
-      if (typeof CAFE24API === 'undefined') return Promise.reject(noSdk());
-      if (typeof CAFE24API[method] !== 'function') {
-        return Promise.reject(new Error(`[FRONT.api.sdk] CAFE24API.${method}() 가 없습니다.`));
+      try {
+        if (typeof CAFE24API === 'undefined') throw noSdk();
+        if (typeof CAFE24API[method] !== 'function') throw new Error(`[FRONT.api.sdk] CAFE24API.${method}() 가 없습니다.`);
+        api.sdk.init();
+      } catch (e) {
+        return Promise.reject(notReady(e));   // SDK 에 닿기도 전의 실패
       }
-      try { api.sdk.init(); } catch (e) { return Promise.reject(e); }
       return FRONT.util.toPromise((cb) => CAFE24API[method](...args, cb));
     },
 
@@ -417,12 +425,15 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
     JSON.stringify(value, ignore?.length ? (k, v) => (ignore.includes(k) ? undefined : v) : undefined);
 
   // 같은 키로 이미 나간 요청이 있으면 그것을 돌려준다.
-  // clear() 가 inflight 에서 뺀 요청은 돌아와도 캐시에 쓰지 않는다 — 지운 값이 되살아난다
+  // 돌아왔을 때 inflight 에서 빠져 있으면 clear() 가 버린 요청이다. 캐시에 쓰지 않고(지운 값이 되살아난다)
+  // p.cancelled 로 남겨, 뒤에 매달린 revalidate · get 도 그리지 않게 한다
   const refetch = (key, fetcher) => {
     if (inflight[key]) return inflight[key];
     const p = fetcher()
       .then((data) => {
-        if (inflight[key] === p) {
+        if (inflight[key] !== p) {
+          p.cancelled = true;
+        } else {
           memory[key] = { data, time: Date.now() };
           writeSession(key, memory[key]);
         }
@@ -447,6 +458,8 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
     p.notified.add(onRevalidate);
     return p
       .then((fresh) => {
+        // clear() 가 버린 요청이다. 늦게 와서 새로 받은 화면을 덮지 않게
+        if (p.cancelled) return;
         // 응답이 늦게 왔는데 그 사이 화면이 바뀌었으면 그리지 않는다
         if (isValid && !isValid()) return;
         // 먼저 매달린 뒤 get() 이 같은 요청을 기다려 돌려줬다 — 그쪽이 그리므로 여기선 넘긴다
@@ -485,7 +498,12 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
       const awaited = () => {
         const p = refetch(key, fetcher);
         if (o.onRevalidate) { p.notified.add(o.onRevalidate); p.direct.add(o.onRevalidate); }
-        return p;
+        return p.then((data) => {
+          if (!p.cancelled) return data;
+          // 기다리는 사이 clear() 가 이 요청을 버렸다. 그 뒤에 받은 값이 있으면 그것을, 없으면 다시 기다린다
+          const fresh = readEntry(key);
+          return fresh ? fresh.data : awaited();
+        });
       };
 
       const entry = readEntry(key);
@@ -495,7 +513,8 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
       // 못 받아오면 그때 가서 있는 것이라도 쓴다
       if (isExpired(entry, maxAge)) {
         FRONT.util.log('캐시가 maxAge 를 넘겨 새로 받는다:', key);
-        return awaited().catch(() => entry.data);
+        // 기다리는 사이 clear() 가 지웠으면 지운 값으로 돌아가지 않는다
+        return awaited().catch((err) => { if (readEntry(key) === entry) return entry.data; throw err; });
       }
 
       if (isStale(entry, ttl)) revalidate(key, fetcher, entry, o);
@@ -624,16 +643,15 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
   let promise = null;
 
   // 결과는 세 가지다.
-  //   ready:false  SDK가 아직 없음 — 판단 불가. 캐시하면 안 된다
-  //   guest:true   SDK가 Error(403) — 비회원 확정. 재시도 대상이 아니다
+  //   ready:false  SDK 에 닿지 못함(없음 · 메서드 없음 · init 오류) — 판단 불가. 캐시하면 안 된다.
+  //                비회원으로 보면 verify() 가 멀쩡한 회원 쿠키를 지운다
+  //   guest:true   SDK 가 답한 실패(콜백 에러 또는 응답의 error.code 403) — 비회원 확정. 재시도 대상이 아니다
   //   그 외        로그인. customer.member_id 가 비어 있으면 재시도 대상
-  const getCustomer = () => {
-    if (typeof CAFE24API === 'undefined') return Promise.resolve({ ready: false });
-    return FRONT.api.sdk
+  const getCustomer = () =>
+    FRONT.api.sdk
       .call('getCustomerInfo')
-      .then((res) => ({ ready: true, customer: res?.customer }))
-      .catch(() => ({ ready: true, guest: true }));
-  };
+      .then((res) => (res?.error?.code === 403 ? { ready: true, guest: true } : { ready: true, customer: res?.customer }))
+      .catch((err) => (err?.notReady ? { ready: false } : { ready: true, guest: true }));
 
   const remember = (customer) => {
     member.info = customer;

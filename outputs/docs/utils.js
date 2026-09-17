@@ -65,7 +65,8 @@ window.FRONT = window.FRONT || {};
     url(path) {
       const base = String(FRONT.config?.SKIN_BASE || '').replace(/^\/|\/$/g, '');
       const p = String(path || '');
-      if (!base) return p;
+      // 외부 주소(https: · //cdn) · mailto: · javascript: · #top · ?q= 는 그대로 둔다
+      if (!base || !p || /^([a-z][a-z\d+.-]*:|\/\/|[#?])/i.test(p)) return p;
       const pre = '/' + base;
       if (p === pre || p.indexOf(pre + '/') === 0) return p;
       return pre + (p.charAt(0) === '/' ? p : '/' + p);

@@ -44,20 +44,17 @@ window.FRONT = window.FRONT || {};
 
   // 결과를 세 가지로 구분한다. 이 구분이 캐시 정책을 정한다.
   //
-  //   { ready: false }              SDK 자체가 아직 없음 → 판단 불가.
-  //                                 캐시하면 SDK가 늦게 뜬 회원이 페이지 내내 비회원이 된다
-  //   { ready: true, guest: true }  SDK가 Error(403) → 비회원 확정. 재시도 대상 아님
+  //   { ready: false }              SDK 에 닿지 못함(없음 · 메서드 없음 · init 오류 — sdk.call 의 err.notReady)
+  //                                 → 판단 불가. 캐시하면 SDK가 늦게 뜬 회원이 페이지 내내 비회원이 되고,
+  //                                   verify() 는 멀쩡한 회원 쿠키를 지운다(CLIENT_ID 누락 하나로 전 회원 로그아웃)
+  //   { ready: true, guest: true }  SDK 가 답한 실패 → 비회원 확정. 재시도 대상 아님.
+  //                                 콜백 에러로도, 정상 응답의 error.code 403 으로도 온다(허닭이 둘 다 처리했다)
   //   { ready: true, customer }     로그인. member_id가 비어 있으면 재시도 대상
-  //
-  // 셋을 null 하나로 뭉개면 안 된다 — 'SDK가 아직 없음'을 비회원으로 캐시하게 된다.
-  const getCustomer = () => {
-    if (typeof CAFE24API === 'undefined') return Promise.resolve({ ready: false });
-
-    return FRONT.api.sdk
+  const getCustomer = () =>
+    FRONT.api.sdk
       .call('getCustomerInfo')
-      .then((res) => ({ ready: true, customer: res?.customer }))
-      .catch(() => ({ ready: true, guest: true }));
-  };
+      .then((res) => (res?.error?.code === 403 ? { ready: true, guest: true } : { ready: true, customer: res?.customer }))
+      .catch((err) => (err?.notReady ? { ready: false } : { ready: true, guest: true }));
 
   // 확정된 회원을 메모리와 쿠키에 담는다
   const remember = (customer) => {
