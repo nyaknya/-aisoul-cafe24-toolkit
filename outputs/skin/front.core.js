@@ -430,6 +430,7 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
       })
       .finally(() => { if (inflight[key] === p) delete inflight[key]; });
     p.notified = new Set();   // 이 응답에 이미 매단 onRevalidate 들
+    p.direct = new Set();     // 이 응답을 get() 이 기다려 돌려줘서 호출부가 직접 그리는 onRevalidate 들
     return (inflight[key] = p);
   };
 
@@ -448,6 +449,8 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
       .then((fresh) => {
         // 응답이 늦게 왔는데 그 사이 화면이 바뀌었으면 그리지 않는다
         if (isValid && !isValid()) return;
+        // 먼저 매달린 뒤 get() 이 같은 요청을 기다려 돌려줬다 — 그쪽이 그리므로 여기선 넘긴다
+        if (p.direct.has(onRevalidate)) return;
         if (prev && fingerprint(fresh, ignore) === fingerprint(prev.data, ignore)) return;
         onRevalidate(fresh);
       })
@@ -481,7 +484,7 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
       // onRevalidate 를 매달면 한 응답이 두 번 그려지므로, 이미 매단 것으로 쳐둔다
       const awaited = () => {
         const p = refetch(key, fetcher);
-        if (o.onRevalidate) p.notified.add(o.onRevalidate);
+        if (o.onRevalidate) { p.notified.add(o.onRevalidate); p.direct.add(o.onRevalidate); }
         return p;
       };
 
