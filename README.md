@@ -74,6 +74,16 @@
 if (value.includes('{$')) return;   // 치환 실패한 값
 ```
 
+**`module="..."` 은 보통 `xans-*` 클래스로 치환되지만, EZ 편집 영역 안에서는
+속성이 그대로 남는다.** 카페24 모듈을 선택자로 잡을 때는 둘 다 걸어야 한다.
+
+```js
+// 상품 목록 위 정렬·개수 메뉴
+'.xans-product-normalmenu, [module="product_normalmenu"]'
+```
+
+이런 선택자는 스킨 업데이트로 우리 코드와 무관하게 바뀐다. `FRONT.sel` 에 모아둔다.
+
 ## EZ (디자인 편집) 영역
 
 `ez-` 계열은 카페24 디자인 편집 기능이 쓴다. 임의로 건드리지 말 것.
@@ -248,6 +258,41 @@ const SELECTORS = { ... };
 
 **둘의 CDN 구성이 다를 수 있다.** 한쪽에만 axios가 있으면 그 레이아웃을 쓰는 페이지에서만
 조용히 실패한다. 새 몰 작업 시 양쪽 다 확인할 것.
+
+## 8. 뒤로가기 캐시(bfcache)가 안 걸린다
+
+카페24가 스킨 페이지에 `Cache-Control: no-store` 를 보낸다.
+크롬 개발자도구 > Application > Back/forward cache 에서 확인된다.
+
+```
+notRestoredReasons: response-cache-control-no-store
+```
+
+- 뒤로가기로 돌아오면 페이지가 **통째로 다시 뜬다.** 스크립트도 처음부터 돈다
+- `pageshow` 의 `event.persisted` 는 뜨지 않는다. 그걸 전제로 짠 복원 코드는 안 돈다
+- 화면 상태(스크롤 위치, 펼친 목록, 선택)를 유지하려면 직접 저장해야 한다.
+  `FRONT.cache` 가 `sessionStorage` 를 쓰는 이유가 이것이다
+
+## 9. 스킨 파일 직접 주소는 CDN이 오래 캐시한다
+
+`https://.../skin-skinN/myskin/front.core.js` 처럼 파일을 직접 열면
+방금 올린 내용이 아니라 CDN에 남은 옛 내용이 보인다.
+
+- 올린 게 맞는지 확인할 때는 `?v=` 를 붙여서 연다
+- **손님 화면에는 영향이 없다.** 실제 페이지는 `optimizer_user.php` 묶음으로 나가고
+  그쪽은 `t`(타임스탬프)가 캐시 키라 새로 올리면 바로 바뀐다
+- 확인은 파일 주소가 아니라 실제 페이지에서 할 것
+
+## 10. 스킨에 딸려 오는 라이브러리는 버전을 확인한다
+
+스킨이 자체적으로 싣는 라이브러리는 최신이 아닌 경우가 많다.
+같은 요소를 우리가 다시 잡을 때 판별 방법이 달라진다.
+
+```js
+// Swiper 6+ 는 .swiper-initialized, 4.x 는 .swiper-container-initialized 를 붙인다.
+// 클래스로 찾지 말고 el.swiper 로 찾는다 — 버전과 무관하다
+FRONT.util.destroySwipers($section);
+```
 
 ---
 

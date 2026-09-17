@@ -6,7 +6,11 @@
 
 ## 1. 공통 장바구니 담기
 
-**상태:** 설계 중. 응답 포맷 미확인이라 코드 작성 전 단계.
+**상태:** 경로 확정(SDK `addCart`). 실제 몰에서 돌려본 결과가 아래에 있다.
+남은 건 키트용 `FRONT.cart.add()` 로 묶는 일뿐이다.
+
+> 아래 "실호출로 확인된 것"은 노바딜(etlandmall) 작업에서 나온 결과다.
+> 내부 폼 URL(`/exec/front/order/basket/`) 갈래는 **쓰지 않아도 된다**는 것도 여기서 정해졌다.
 
 ### 목표
 
@@ -26,7 +30,61 @@ FRONT.api.sdk          카페24 JS SDK      콜백 + 세션
 문서화된 API가 아니라 스킨이 내부적으로 쓰는 폼 처리 URL이다.
 `FRONT.api` 아래가 아니라 `FRONT.cart` 같은 도메인 모듈로 간다.
 
-### 경로 후보 2가지
+### 실호출로 확인된 것 (2026-09, 노바딜)
+
+**SDK `addCart` 는 앱 스코프만으로 된다.** 개인화정보 쓰기(`mall.write_personal`) 권한이
+있으면 되고, `hmac` 도 백엔드도 필요 없다. 내부 폼 URL을 쓸 이유가 없어졌다.
+
+```js
+FRONT.api.sdk.call('addCart', 'A0000', 'P', [
+  { product_no: 24, variants_code: 'P000BXYZ000A', quantity: 1 },
+]);
+//  basket_type          A0000 일반 / A0001 무이자
+//  prepaid_shipping_fee P 선불 / C 착불
+//  한 번에 10개까지
+```
+
+**실패가 콜백 첫 인자로 오지 않는다.** `err` 는 `null` 인 채로 두 번째 인자에 실려 온다.
+그래서 `toPromise` 만 믿으면 실패해도 `resolve` 로 흘러간다 —
+실제로 그 탓에 담기지 않았는데 장바구니로 이동해버렸다. **키트에 래퍼가 필요한 지점이다.**
+
+```js
+//  { cart: [...] }                              성공
+//  { errors: [{ code, message, more_info }] }   담기 거절 (422 등)
+//  { error: { code, message } }                 세션 문제 (403 비로그인)
+function throwIfCartError(res) {
+  const first = (res && res.errors && res.errors[0]) || (res && res.error) || null;
+  if (first) {
+    const err = new Error(first.message || '장바구니 담기에 실패했습니다.');
+    err.code = first.code;
+    err.moreInfo = first.more_info;   // 어느 상품이 왜 거절됐는지가 여기 담긴다
+    throw err;
+  }
+  return res;
+}
+```
+
+**세트(번들)상품은 프론트 `addCart` 가 아예 받지 않는다.** 상품 상세에서만 담긴다.
+구분할 코드가 따로 없어서 메시지로 가른다 —
+`"You cannot add a bundle product to shopping cart."`
+
+**착불(`'C'`)은 상품 설정과 다르면 422로 거절된다.**
+`"Check which shipping fee payment method is configured for this product"`
+
+**여러 개는 묶지 말고 한 개씩 보낸다.** 10개를 한 요청에 묶으면 한 상품이 거절될 때
+묶음이 통째로 떨어진다 — 세트상품 하나 때문에 정상 상품까지 안 담기고, 어느 상품
+탓인지도 알 수 없다. 한 개씩 보내면 담길 것은 담기고 떨어진 것만 짚어줄 수 있다.
+**실패해도 reject 하지 않고 결과만 모은다.** 재시도도 하지 않는다 —
+묶어 보낼 때 일부만 담겼는지 알 수 없어, 재시도하면 같은 상품이 두 번 담길 수 있었다.
+
+### 키트에 넣을 때 정할 것
+
+- [ ] `FRONT.cart.add(items)` 의 반환 형태 — `[{ item, ok, err }]` 를 그대로 줄지
+- [ ] 담긴 뒤 처리(장바구니 카운트 갱신, 완료 레이어)를 키트가 할지 호출부가 할지
+- [ ] 옵션(variant) 있는 상품을 키트에서 고르게 할지, 원본 옵션 레이어(`EC_ListAction`)로 넘길지
+- [ ] 중복 클릭 방지를 키트에서 할지 (원본 `unsetOnclikAction` 이 하던 일)
+
+### 경로 후보 2가지 (기록용 — SDK 경로로 정해졌다)
 
 | | 내부 엔드포인트 | SDK `addCart` |
 |---|---|---|
@@ -130,10 +188,11 @@ POST는 마지막 한 줄이고 나머지가 전부 방어 로직이다.
 
 ### 확인 필요
 
-- [ ] **응답 포맷** — 위 코드가 `res.json()` 을 쓰는데 JSON을 주는지 미확인.
-      카페24 내부 폼 URL은 HTML이나 JS 조각을 뱉는 경우가 흔하다
-- [ ] **옵션상품** — 키트에서 처리할지, 원본 함수(`EC_ListAction`)에 넘길지
-- [ ] **SDK `addCart`** 가 앱 스코프만으로 되는지
+- [x] **SDK `addCart` 가 앱 스코프만으로 되는지** — 된다 (`mall.write_personal`)
+- [x] **응답 포맷** — SDK 경로로 정해져서 내부 폼 URL의 응답 포맷은 확인할 필요가 없어졌다.
+      SDK 쪽 응답 형태는 위 "실호출로 확인된 것" 참고
+- [ ] **옵션상품** — 키트에서 처리할지, 원본 함수(`EC_ListAction`)에 넘길지.
+      `variants_code` 를 넘기면 담기는 것은 확인됐다. 고르는 UI 가 남은 문제다
 - [ ] 페이지별 장바구니 함수가 몇 종류인지 (상품상세 / 목록 / 위시리스트 …)
 
 응답 포맷 확인용 — 실제 몰 콘솔에서. **담기까지 실행되니 테스트 상품으로:**
