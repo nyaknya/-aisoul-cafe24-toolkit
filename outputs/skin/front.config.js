@@ -17,8 +17,18 @@ window.FRONT = window.FRONT || {};
     // 자체 백엔드(중계 서버) 주소. 안 쓰면 빈 문자열
     MIDDLEWARE_BASE: '',
 
-    // 스킨 경로 접두사. 멀티스킨이 아니면 빈 문자열
+    // 스킨 경로 접두사. 멀티스킨이 아니면 빈 문자열.
+    // FRONT.util.url() 이 이 값을 붙인다 — 작업 스킨과 라이브 스킨이 다르면 반드시 채운다
     SKIN_BASE: '',
+
+    /* 미들웨어에 붙일 로그인 토큰. 토큰을 쓰는 몰만 채운다.
+       코어가 특정 로그인 방식을 직접 알면 그 방식이 없는 몰에서 터지므로 여기로 뺐다.
+         TOKEN: () => JSON.parse(localStorage.getItem('mymall.token') || '{}').accessToken || null,
+       401 을 만나면 코어가 아래 훅을 한 번 부르고 그 요청만 다시 보낸다.
+       갱신에 실패하면 원래의 401 이 호출부로 올라간다
+         ON_UNAUTHORIZED: () => refreshMyToken(),   // Promise 를 돌려줄 것 */
+    // TOKEN: null,
+    // ON_UNAUTHORIZED: null,
 
     // 기본 꺼짐. 주소에 ?debug=1 을 붙이면 그 페이지에서만 켜진다
     DEBUG: /[?&]debug=1/.test(location.search),

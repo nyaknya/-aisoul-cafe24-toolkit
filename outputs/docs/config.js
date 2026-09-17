@@ -15,8 +15,25 @@ window.FRONT = window.FRONT || {};
     // 자체 백엔드(중계 서버) 주소. 없으면 빈 문자열
     MIDDLEWARE_BASE: '',
 
-    // 스킨 경로 접두사. 멀티스킨이 아니면 빈 문자열
+    // 스킨 경로 접두사. 멀티스킨이 아니면 빈 문자열.
+    // FRONT.util.url() 이 이 값을 붙인다. 작업 스킨과 라이브 스킨이 따로 있으면
+    // 이걸 안 채운 링크가 전부 라이브 스킨으로 튄다 — 화면은 멀쩡한데 수정이 안 보인다
     SKIN_BASE: '',
+
+    /* 미들웨어 요청에 붙일 로그인 토큰과, 401 일 때 부를 갱신 함수.
+       토큰을 쓰는 몰만 채운다. 둘 다 함수다.
+
+       코어가 특정 로그인 방식(SSO, 자체 로그인 …)을 직접 부르게 하면
+       그 방식이 없는 몰에서 첫 요청이 TypeError 로 죽는다. 그래서 훅으로 뺐다.
+       비워두면 Authorization 없이 나가고, 401 은 그대로 호출부로 올라간다.
+
+         TOKEN: () => JSON.parse(localStorage.getItem('mymall.token') || '{}').accessToken || null,
+         ON_UNAUTHORIZED: () => refreshMyToken(),   // Promise 를 돌려줄 것
+
+       ON_UNAUTHORIZED 는 요청 하나당 한 번만 불린다(재시도 표시를 남긴다).
+       갱신에 실패하면 원래의 401 이 호출부로 간다 */
+    // TOKEN: null,
+    // ON_UNAUTHORIZED: null,
 
     // 기본은 꺼짐. 주소 뒤에 ?debug=1 을 붙이면 그 페이지에서만 켜진다.
     // FRONT.util.log() 출력이 여기에 걸린다 — 운영에 로그 남긴 채 배포해도 안전
