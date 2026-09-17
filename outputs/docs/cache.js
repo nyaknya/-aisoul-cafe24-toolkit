@@ -14,6 +14,11 @@
 
      if (!FRONT.cache.has(key)) showSkeleton();
 
+   목록 화면이면 위 둘을 묶은 load 를 쓴다. has 와 get 의 maxAge 를 맞출 필요가 없고,
+   늦게 온 응답·실패를 isValid 로 거르는 것까지 한다.
+
+     FRONT.cache.load(key, fetcher, { render, skeleton: showSkeleton, onError: showError, isValid });
+
    저장은 sessionStorage 다. 탭 단위라 새 탭은 비어 있고, 목록 → 상세 → 뒤로가기는
    같은 탭이라 살아남는다. localStorage 로 하면 며칠 전 가격이 남는다.
 
@@ -138,18 +143,48 @@ window.FRONT = window.FRONT || {};
       const o = { ...opts, ttl, maxAge };
       if (o.onRevalidate) live.set(o.onRevalidate, { key, fetcher, opts: o });
 
+      // 호출부가 이 응답을 직접 그린다. 기다리는 사이 탭 복귀(revalidateAll)가 같은 요청에
+      // onRevalidate 를 매달면 한 응답이 두 번 그려지므로, 이미 매단 것으로 쳐둔다
+      const awaited = () => {
+        const p = refetch(key, fetcher);
+        if (o.onRevalidate) p.notified.add(o.onRevalidate);
+        return p;
+      };
+
       const entry = readEntry(key);
-      if (!entry) return refetch(key, fetcher);
+      if (!entry) return awaited();
 
       // 너무 오래됐다 — 그리지 않고 기다린다.
       // 못 받아오면 그때 가서 있는 것이라도 쓴다
       if (isExpired(entry, maxAge)) {
         FRONT.util.log('캐시가 maxAge 를 넘겨 새로 받는다:', key);
-        return refetch(key, fetcher).catch(() => entry.data);
+        return awaited().catch(() => entry.data);
       }
 
       if (Date.now() - entry.time >= ttl) revalidate(key, fetcher, entry, o);
       return Promise.resolve(entry.data);
+    },
+
+    /* 목록 화면의 흐름을 한 번에 — 스켈레톤 → get → 그리기 → 실패 처리.
+         FRONT.cache.load(key, fetcher, { render, skeleton, onError, isValid, ttl, maxAge, ignore })
+
+       get + has 를 손으로 조합하면 두 군데서 어긋났다.
+         - has() 에 get() 과 같은 maxAge 를 넘겨야 한다
+         - isValid 는 재검증 때만 불린다. 캐시가 없는 첫 조회는 get().then 으로 바로 오므로
+           호출부가 거기서 한 번 더 확인해야 했다 — 빠뜨리면 늦게 온 1페이지가 3페이지를 덮는다
+       여기선 성공·재검증·실패 모두 isValid 를 거친다.
+       render 는 onRevalidate 로도 쓰이므로 이름 있는 함수로 넘긴다(get 의 주의와 같다).
+       onError 가 없으면 reject 를 그대로 올린다 */
+    load(key, fetcher, { render, skeleton, onError, ...opts }) {
+      const current = () => !opts.isValid || opts.isValid();
+      if (skeleton && !cache.has(key, opts.maxAge)) skeleton();
+      return cache.get(key, fetcher, { ...opts, onRevalidate: render })
+        .then((data) => { if (current()) render(data); })
+        .catch((err) => {
+          if (!current()) return;
+          if (!onError) throw err;
+          onError(err);
+        });
     },
 
     /* 화면에 살아 있는 조회들을 다시 확인한다.

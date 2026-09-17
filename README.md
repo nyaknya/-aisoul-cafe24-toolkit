@@ -189,7 +189,7 @@ document.addEventListener('DOMContentLoaded', () => {
 ```js
 // 모든 파일 맨 위
 window.FRONT = window.FRONT || {};
-FRONT.page = FRONT.page || function (fn) { (FRONT._q = FRONT._q || []).push(fn); };
+FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(arguments); };
 ```
 
 먼저 실행된 파일은 큐에 쌓고, 진짜 구현이 로드되면 큐를 비운다.
@@ -293,6 +293,65 @@ notRestoredReasons: response-cache-control-no-store
 // 클래스로 찾지 말고 el.swiper 로 찾는다 — 버전과 무관하다
 FRONT.util.destroySwipers($section);
 ```
+
+**Swiper 4.x 는 옵션 의미도 다르다.**
+
+- `breakpoints` 의 키가 **max-width** 다(그 값 "이하"일 때 적용). 5 이상은 min-width 라 정반대로 읽기 쉽다
+- `loop: true` 면 모자란 슬라이드를 복제해 채운다. 상품 1개가 같은 카드 3장이 된다 —
+  슬라이드 수가 `slidesPerView` 보다 많을 때만 `loop` · `autoplay` 를 켠다
+
+## 11. 모듈이 그린 마크업을 스크립트로 다룰 때
+
+카페24 모듈이 출력한 마크업은 설정 · 스킨 업데이트에 따라 달라진다. 확인된 함정들:
+
+- **`module="product_listnormal"` 안의 `<ul>` 을 비워두면 카페24가 그 div 를 레코드 수만큼 복제한다.**
+  스크립트로 목록을 채우는 컨테이너라면 `.html()` 이 복제본 전부를 같은 카드로 채운다.
+  목록 컨테이너가 한 개인지 먼저 확인한다
+- **카페24가 서버 렌더 href 에 스킨 접두사를 붙여 다시 쓴다.** 링크에서 상품번호를 캘 때는
+  경로가 아니라 `product_no=` 파라미터로 찾는다
+- **SEO URL 에는 쿼리가 없다.** 상품 상세에서 `query('product_no')` 는 비어 있을 수 있다 —
+  마크업에 `data-product-no="{$product_no}"` 로 심어서 읽는다
+- **정렬 select(`#selArray`)에는 카페24 기본 스크립트가 붙어 페이지를 이동시킨다.**
+  직접 처리하려면 `.off()` 와 `removeAttr('onchange')` 로 떼어낸다
+- **`{$...|display}` 가 `displaynone` 을 항상 붙여주지는 않는다.** 예: 장바구니 할인표시 설정이
+  꺼져 있으면 할인 없는 행에도 안 붙는다. 플래그만 믿지 말고 값도 비교한다
+- 상품 상세의 최대혜택가는 `#span_optimum_discount_price` 에 그려진다. 바꿀 때는 텍스트만 갈고
+  원래 html 을 보관해 뒀다가 되돌린다
+
+## 12. 장바구니 화면
+
+`Basket` 전역의 내부 함수들이다. **문서화되지 않았으니 카페24 업데이트로 바뀔 수 있다.**
+쓰기 전에 `typeof Basket._callCalcAjax === 'function'` 처럼 있는지부터 본다.
+
+- **`Order_list` 모듈 블록을 두 벌 두면 레코드가 블록마다 한 벌씩 반복된다.** 같은 상품이 두 번,
+  DOM id 도 중복으로 나온다. 그룹을 나누려면 한쪽에서 해당 없는 행을 지운다
+- **체크박스 하나를 바꿀 때마다 `POST /exec/front/order/calculator` 가 한 번 나간다.**
+  여러 개를 한꺼번에 바꿀 때는 이벤트를 흘리지 말고 계산을 직접 한 번 부른다
+  ```js
+  Basket._callCalcAjax({
+    checked_product: Basket._getCheckedProductList().join(','),
+    all_checked: allChecked ? 'T' : 'F',
+  });
+  ```
+- 주문 · 선택삭제 · 합계 계산은 전부 `Basket._getCheckedProduct` 로 체크된 상품을 모은다
+- 아무것도 안 고르고 주문하면 카페24가 "선택된 상품이 없습니다" 로 막는다
+
+**담기**는 SDK `addCart` 를 쓴다 — `FRONT.cart.add()`. 확인된 응답 규칙은 [BACKLOG.md](BACKLOG.md) 1번.
+
+- 실패가 콜백 첫 인자가 아니라 **성공 응답에 실려** 온다
+- 품절 상품은 422 `"Failed to add the product to the cart"` — 어느 상품인지 말해주지 않는다.
+  목록에서 미리 못 고르게 막는다
+- 세트상품은 프론트 `addCart` 가 받지 않는다. 착불(`C`)은 상품 설정과 다르면 422
+
+## 13. 브라우저 차이가 스킨에서 잘 터지는 곳
+
+- **사파리는 `new Date('2026-08-16 15:29:36')` 를 못 읽는다(NaN).** 백엔드 날짜 형식이 대개 이거라
+  크롬에서만 보면 아이폰에서 카운트다운이 사라진다. `FRONT.util.parseDate()` 를 쓴다
+- **`navigator.clipboard` 는 https 에서만 있다.** 없으면 textarea + `execCommand('copy')` 로 떨어뜨리고,
+  iOS 는 `select()` 만으로 선택이 안 잡혀 `setSelectionRange(0, text.length)` 가 필요하다.
+  textarea 를 `display:none` 으로 숨기면 선택이 안 된다 — 화면 밖으로 뺀다
+- **jQuery `.html()` 은 넣은 문자열의 `<script>` 를 실행한다.** CMS 본문처럼 받은 html 을 넣을 때는
+  `<template>` 에 파싱하면 실행되지 않는다(그래도 허용 태그 걸러내기는 따로 해야 한다)
 
 ---
 

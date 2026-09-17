@@ -201,18 +201,6 @@ window.FRONT = window.FRONT || {};
       return FRONT.util.toPromise((cb) => CAFE24API[method](...args, cb));
     },
 
-    // 로그인 회원 정보. 비로그인이거나 권한 없으면 null.
-    //
-    // 주의: 캐시도 재시도도 없는 날것이다. 보통은 FRONT.member.fetch() 를 쓴다.
-    // 여기서는 "비로그인"과 "아직 안 채워짐"이 똑같이 null이 되므로,
-    // FRONT.member 는 이걸 쓰지 못하고 call() 을 직접 부른다.
-    customer() {
-      return api.sdk
-        .call('getCustomerInfo')
-        .then((res) => res?.customer || null)
-        .catch(() => null);
-    },
-
     cartCount() {
       return api.sdk.call('getCartCount');
     },

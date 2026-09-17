@@ -11,6 +11,8 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
 
   let toastTimer = null;
 
+  const BLANK_IMG = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
   // 인라인 SVG — 아이콘 파일에 의존하지 않는다. 색은 front.core.css 가 준다
   // 세 아이콘은 안쪽 선 모양(d)만 다르다. 껍데기를 한 벌로 둔다
   const toastIcon = (d, extra) =>
@@ -27,7 +29,7 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
   const util = {
     // 1000 → '1,000'
     formatNumber(n) {
-      return Number(n || 0).toLocaleString();
+      return Number(n || 0).toLocaleString('ko-KR');   // 로캘을 안 주면 브라우저 언어를 따라 1.000 이 된다
     },
 
     // '2026-08-04T12:00:00' → '2026.08.04'
@@ -38,13 +40,6 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
     // 사용자 입력을 html로 넣기 전 필수
     escapeHtml(v) {
       return String(v ?? '').replace(/[&<>"']/g, (c) => ESCAPE_MAP[c]);
-    },
-
-    // 'a, b' → '<p class="opt">a<br>b</p>'
-    listToHtml(value, className = '') {
-      const parts = String(value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-      if (!parts.length) return '';
-      return `<p class="${className}">${parts.map((p) => util.escapeHtml(p)).join('<br>')}</p>`;
     },
 
     // ?cate_no=125 → query('cate_no') → '125'
@@ -76,6 +71,23 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
       setJSON(key, obj, minutes) {
         util.cookie.set(key, JSON.stringify(obj), minutes);
       },
+    },
+
+    // '2026-08-16 15:29:36' → ms. 못 읽으면 NaN
+    // 사파리는 '-' 로 구분한 날짜에 시간이 붙으면 못 읽는다. 날짜 부분만 '/' 로 바꾼다
+    parseDate(s) {
+      return new Date(String(s || '').replace(/^(\d{4})-(\d{2})-(\d{2})(?!T)/, '$1/$2/$3')).getTime();
+    },
+
+    // url 이 비어 오는 상품이 있다. src="" 를 박으면 깨진 이미지 아이콘이 뜬다 —
+    // 투명 1px 로 채우고 is-noimg 를 붙인다(모양은 스킨 CSS)
+    // 템플릿 <img> 에 직접 src 를 넣을 때는 FRONT.util.BLANK_IMG 를 쓴다
+    //   FRONT.util.img(item.imageUrl, item.name, 'thumb', ' loading="lazy"')
+    BLANK_IMG,
+    img(url, alt, className, extraAttrs) {
+      const cls = [className, url ? '' : 'is-noimg'].filter(Boolean).join(' ');
+      return '<img src="' + (url ? util.escapeHtml(url) : BLANK_IMG) + '"' +
+        (cls ? ' class="' + cls + '"' : '') + ' alt="' + util.escapeHtml(alt) + '"' + (extraAttrs || '') + '>';
     },
 
     // 한 번만 계산해서 재사용. 실패하면 다음에 재시도
@@ -339,14 +351,6 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
       return FRONT.util.toPromise((cb) => CAFE24API[method](...args, cb));
     },
 
-    // 비로그인이면 null. 캐시도 재시도도 없다 — 보통은 FRONT.member.fetch() 를 쓴다
-    customer() {
-      return api.sdk
-        .call('getCustomerInfo')
-        .then((res) => res?.customer || null)
-        .catch(() => null);
-    },
-
     cartCount() { return api.sdk.call('getCartCount'); },
     couponCount() { return api.sdk.call('getCouponCount'); },
   };
@@ -466,18 +470,48 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
       const o = { ...opts, ttl, maxAge };
       if (o.onRevalidate) live.set(o.onRevalidate, { key, fetcher, opts: o });
 
+      // 호출부가 이 응답을 직접 그린다. 기다리는 사이 탭 복귀(revalidateAll)가 같은 요청에
+      // onRevalidate 를 매달면 한 응답이 두 번 그려지므로, 이미 매단 것으로 쳐둔다
+      const awaited = () => {
+        const p = refetch(key, fetcher);
+        if (o.onRevalidate) p.notified.add(o.onRevalidate);
+        return p;
+      };
+
       const entry = readEntry(key);
-      if (!entry) return refetch(key, fetcher);
+      if (!entry) return awaited();
 
       // 너무 오래됐다 — 그리지 않고 기다린다.
       // 못 받아오면 그때 가서 있는 것이라도 쓴다
       if (isExpired(entry, maxAge)) {
         FRONT.util.log('캐시가 maxAge 를 넘겨 새로 받는다:', key);
-        return refetch(key, fetcher).catch(() => entry.data);
+        return awaited().catch(() => entry.data);
       }
 
       if (Date.now() - entry.time >= ttl) revalidate(key, fetcher, entry, o);
       return Promise.resolve(entry.data);
+    },
+
+    /* 목록 화면의 흐름을 한 번에 — 스켈레톤 → get → 그리기 → 실패 처리.
+         FRONT.cache.load(key, fetcher, { render, skeleton, onError, isValid, ttl, maxAge, ignore })
+
+       get + has 를 손으로 조합하면 두 군데서 어긋났다.
+         - has() 에 get() 과 같은 maxAge 를 넘겨야 한다
+         - isValid 는 재검증 때만 불린다. 캐시가 없는 첫 조회는 get().then 으로 바로 오므로
+           호출부가 거기서 한 번 더 확인해야 했다 — 빠뜨리면 늦게 온 1페이지가 3페이지를 덮는다
+       여기선 성공·재검증·실패 모두 isValid 를 거친다.
+       render 는 onRevalidate 로도 쓰이므로 이름 있는 함수로 넘긴다(get 의 주의와 같다).
+       onError 가 없으면 reject 를 그대로 올린다 */
+    load(key, fetcher, { render, skeleton, onError, ...opts }) {
+      const current = () => !opts.isValid || opts.isValid();
+      if (skeleton && !cache.has(key, opts.maxAge)) skeleton();
+      return cache.get(key, fetcher, { ...opts, onRevalidate: render })
+        .then((data) => { if (current()) render(data); })
+        .catch((err) => {
+          if (!current()) return;
+          if (!onError) throw err;
+          onError(err);
+        });
     },
 
     /* 화면에 살아 있는 조회들을 다시 확인한다.
@@ -700,35 +734,59 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
   }, true);
 })();
 
-/* --- category ------------------------------------------------------ */
+/* --- cart ---------------------------------------------------------- */
 (() => {
-  // parentNo별 로더. util.once가 "성공은 캐시, 실패는 재시도"를 맡는다
-  const loaders = {};
-
-  const category = {
-    // 하위 카테고리 목록. parentNo별로 캐시된다
-    //   FRONT.category.list(115).then((list) => ...)
-    list(parentNo, limit = 100) {
-      const key = `${parentNo}:${limit}`;
-      loaders[key] = loaders[key] || FRONT.util.once(() =>
-        FRONT.api.front
-          .get('/api/v2/categories', { parent_category_no: parentNo, limit })
-          .then((res) => res.data?.categories || []));
-      return loaders[key]();
-    },
-
-    // 이름이 정확히 일치하는 하위 카테고리. 없으면 null
-    //   FRONT.category.findByName('브랜드명', 115).then((c) => c && c.category_no)
-    findByName(name, parentNo, limit) {
-      const target = String(name ?? '').trim();
-      if (!target) return Promise.resolve(null);
-      return category
-        .list(parentNo, limit)
-        .then((list) => list.find((c) => c.category_name === target) || null);
-    },
+  /* SDK addCart 는 실패를 콜백 첫 인자로 주지 않는다. err 는 null 이고 두 번째 인자에 실려 온다.
+       { cart: [...] }                              성공
+       { errors: [{ code, message, more_info }] }   담기 거절 (422 — 품절, 착불 설정 불일치 등)
+       { error: { code, message } }                 세션 문제 (403 비로그인)
+     sdk.call 만 믿으면 실패도 resolve 로 흘러, 안 담겼는데 장바구니로 이동한다 */
+  const toError = (res) => {
+    const first = res?.errors?.[0] || res?.error;
+    if (!first) return null;
+    return Object.assign(new Error(first.message || '장바구니 담기에 실패했습니다.'), {
+      code: first.code,
+      moreInfo: first.more_info,   // 어느 상품이 왜 거절됐는지
+      // 세트상품은 프론트 addCart 가 받지 않는다(상세에서만 담긴다). 구분 코드가 없어 메시지로 가른다
+      bundle: /bundle/i.test(first.message || ''),
+    });
   };
 
-  FRONT.category = category;
+  // item 은 호출부의 원래 객체다. 결과에 그대로 돌려줘야 상품명 등으로 실패를 짚을 수 있다
+  // toItem 이 던져도(필드 누락 등) 그 상품만 실패로 남긴다
+  const addOne = (item, toItem, basketType, prepaid) =>
+    Promise.resolve()
+      .then(() => FRONT.api.sdk.call('addCart', basketType, prepaid, [toItem(item)]))
+      .then((res) => {
+        const err = toError(res);
+        if (err) throw err;
+        return { item, ok: true };
+      })
+      .catch((err) => ({ item, ok: false, err }));
+
+  FRONT.cart = {
+    /* 한 개씩 순서대로 담고 [{ item, ok, err }] 를 준다. reject 하지 않는다.
+       묶어 보내면 하나가 거절될 때 묶음이 통째로 떨어지고 어느 상품 탓인지 모른다.
+       재시도도 하지 않는다 — 일부만 담겼는지 알 수 없어 같은 상품이 두 번 담길 수 있다.
+       담은 뒤 처리(카운트 갱신, 완료 레이어)와 중복 클릭 막기는 호출부 몫이다.
+
+         FRONT.cart.add(selected, {
+           toItem: (p) => ({ product_no: Number(p.productNo), variants_code: p.variantsCode, quantity: 1 }),
+         }).then((results) => results.filter((r) => !r.ok))   // r.item 은 selected 의 원소
+
+       toItem      호출부 객체 → SDK 형식. 없으면 이미 SDK 형식이라고 본다
+       basketType  A0000 일반 / A0001 무이자
+       prepaid     P 선불 / C 착불 — 상품 설정과 다르면 422 */
+    add(items, { toItem = (x) => x, basketType = 'A0000', prepaid = 'P' } = {}) {
+      // SDK 초기화 실패는 여기서 삼킨다 — 각 상품의 addCart 가 실패로 받아 결과에 남긴다
+      const start = Promise.resolve().then(() => FRONT.api.sdk.init()).catch(() => {}).then(() => []);
+      return [].concat(items || []).reduce(
+        (chain, item) => chain.then((acc) =>
+          addOne(item, toItem, basketType, prepaid).then((r) => { acc.push(r); return acc; })),
+        start,
+      );
+    },
+  };
 })();
 
 /* --- page ---------------------------------------------------------- */

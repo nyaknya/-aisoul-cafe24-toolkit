@@ -6,8 +6,8 @@
 
 ## 1. 공통 장바구니 담기
 
-**상태:** 경로 확정(SDK `addCart`). 실제 몰에서 돌려본 결과가 아래에 있다.
-남은 건 키트용 `FRONT.cart.add()` 로 묶는 일뿐이다.
+**상태:** 키트에 `FRONT.cart.add()` 로 들어갔다 (2026-09-17). 사용법은 [outputs/README.md](outputs/README.md#frontcart).
+아래는 그렇게 짠 근거로 남긴다.
 
 > 아래 "실호출로 확인된 것"은 노바딜(etlandmall) 작업에서 나온 결과다.
 > 내부 폼 URL(`/exec/front/order/basket/`) 갈래는 **쓰지 않아도 된다**는 것도 여기서 정해졌다.
@@ -79,10 +79,11 @@ function throwIfCartError(res) {
 
 ### 키트에 넣을 때 정할 것
 
-- [ ] `FRONT.cart.add(items)` 의 반환 형태 — `[{ item, ok, err }]` 를 그대로 줄지
-- [ ] 담긴 뒤 처리(장바구니 카운트 갱신, 완료 레이어)를 키트가 할지 호출부가 할지
-- [ ] 옵션(variant) 있는 상품을 키트에서 고르게 할지, 원본 옵션 레이어(`EC_ListAction`)로 넘길지
-- [ ] 중복 클릭 방지를 키트에서 할지 (원본 `unsetOnclikAction` 이 하던 일)
+- [x] 반환 형태 — `[{ item, ok, err }]`. `item` 은 호출부 원래 객체(`toItem` 으로 SDK 형식 변환), `err.bundle` 로 세트상품 구분
+- [x] 담긴 뒤 처리 — 호출부. 완료 레이어·이동이 화면마다 다르다
+- [x] 옵션(variant) 고르기 — 호출부. `variants_code` 를 받아서 넘긴다
+- [x] 중복 클릭 방지 — 호출부
+- [ ] 성공 응답에 `cart` 가 항상 오는지 미확인. 지금은 `errors` · `error` 가 없으면 성공으로 본다
 
 ### 경로 후보 2가지 (기록용 — SDK 경로로 정해졌다)
 

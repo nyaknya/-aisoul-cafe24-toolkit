@@ -9,6 +9,9 @@ window.FRONT = window.FRONT || {};
   // 토스트는 한 번에 하나만 뜬다. 앞의 것을 지울 타이머를 밖에 둔다
   let toastTimer = null;
 
+  // 투명 1px gif. 이미지가 없는 상품의 src 자리에 넣는다
+  const BLANK_IMG = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
   // 아이콘은 인라인 SVG다. 이미지 파일로 두면 스킨마다 경로를 맞춰야 하고,
   // 첫 토스트에서 아이콘만 늦게 뜬다. 색은 front.core.css 가 준다
   // 세 아이콘은 안쪽 선 모양(d)만 다르다. 껍데기를 한 벌로 둔다
@@ -28,7 +31,7 @@ window.FRONT = window.FRONT || {};
 
     // 1000 → '1,000'
     formatNumber(n) {
-      return Number(n || 0).toLocaleString();
+      return Number(n || 0).toLocaleString('ko-KR');   // 로캘을 안 주면 브라우저 언어를 따라 1.000 이 된다
     },
 
     // '2026-08-04T12:00:00' → '2026.08.04'
@@ -39,14 +42,6 @@ window.FRONT = window.FRONT || {};
     // 사용자 입력을 innerHTML/html()에 넣기 전에 반드시 통과시킬 것
     escapeHtml(v) {
       return String(v ?? '').replace(/[&<>"']/g, (c) => ESCAPE_MAP[c]);
-    },
-
-    // '옵션A, 옵션B' → '<p class="opt">옵션A<br>옵션B</p>' (빈 값이면 '')
-    listToHtml(value, className = '') {
-      const parts = String(value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-      if (!parts.length) return '';
-      const rows = parts.map((p) => util.escapeHtml(p)).join('<br>');
-      return `<p class="${className}">${rows}</p>`;
     },
 
     /* --- URL -------------------------------------------------- */
@@ -105,6 +100,29 @@ window.FRONT = window.FRONT || {};
       setJSON(key, obj, minutes) {
         util.cookie.set(key, JSON.stringify(obj), minutes);
       },
+    },
+
+    /* --- 날짜 · 이미지 ----------------------------------------- */
+
+    // '2026-08-16 15:29:36' → ms. 못 읽으면 NaN
+    //
+    // 사파리는 'YYYY-MM-DD HH:mm:ss' 를 못 읽는다(NaN). 백엔드가 주는 형식이 대개 이거라
+    // 크롬에서만 확인하면 아이폰에서 카운트다운이 통째로 사라진다.
+    // 날짜 부분만 '/' 로 바꾼다 — 전부 바꾸면 ISO('...T15:29:36Z') 가 도리어 깨진다.
+    // 날짜만 있는 값('2026-08-16')도 '/' 로 바꿔 현지 자정으로 읽는다(원래는 UTC 자정)
+    parseDate(s) {
+      return new Date(String(s || '').replace(/^(\d{4})-(\d{2})-(\d{2})(?!T)/, '$1/$2/$3')).getTime();
+    },
+
+    // 이미지 태그. url 이 null 로 오는 상품이 있다 — src="" 를 박으면 깨진 이미지 아이콘이 뜬다.
+    // 투명 1px 로 채우고 is-noimg 를 붙인다. 회색 바탕 같은 모양은 스킨 CSS 가 준다.
+    // 템플릿에 이미 있는 <img> 에 src 를 넣을 때는 FRONT.util.BLANK_IMG 를 쓴다
+    //   FRONT.util.img(item.imageUrl, item.name, 'thumb', ' loading="lazy"')
+    BLANK_IMG,
+    img(url, alt, className, extraAttrs) {
+      const cls = [className, url ? '' : 'is-noimg'].filter(Boolean).join(' ');
+      return '<img src="' + (url ? util.escapeHtml(url) : BLANK_IMG) + '"' +
+        (cls ? ' class="' + cls + '"' : '') + ' alt="' + util.escapeHtml(alt) + '"' + (extraAttrs || '') + '>';
     },
 
     /* --- 흐름 제어 -------------------------------------------- */

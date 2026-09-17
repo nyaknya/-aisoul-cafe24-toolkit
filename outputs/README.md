@@ -11,7 +11,7 @@ skin/                  ← 이 폴더 내용을 FTP에 올린다
   page.template.js       페이지 파일 시작점
 
 docs/                  ← 같은 코드 + 왜 그렇게 짰는지 주석. 읽는 용도
-  config.js  utils.js  api.js  cache.js  member.js  category.js  bootstrap.js
+  config.js  utils.js  api.js  cache.js  member.js  cart.js  bootstrap.js
 ```
 
 `skin/` 과 `docs/` 는 기능이 동일하다. 올리는 건 `skin/` 만.
@@ -182,6 +182,9 @@ FRONT.api.front.get('/api/v2/categories', { parent_category_no: 115 })
 그 함수를 한 번 부르고 **같은 요청만** 다시 보낸다.
 
 - 요청 하나당 한 번이다. 갱신된 토큰도 거절당하는 경우에 무한 재시도가 되지 않는다
+- 401 이 동시에 여러 개 와도 **갱신은 한 번만** 나간다. 탭에 돌아와 캐시가 조회를 한꺼번에
+  다시 던질 때가 그렇다 — 요청마다 갱신하면 쓴 refreshToken 을 무효화하는 서버에서 로그인이 풀린다
+- 갱신이 끝난 뒤 **늦게 도착한 401**(옛 토큰으로 나갔던 느린 요청)은 갱신하지 않고 새 토큰으로 다시 보내기만 한다
 - 갱신이 실패하면 **원래의 401** 이 호출부로 간다. 호출부는 '인증 안 됨'으로 처리하면 된다
 - 훅을 안 채운 몰에서는 아무 일도 일어나지 않는다(401 그대로)
 
@@ -214,10 +217,10 @@ FRONT.api.sdk.call('addCurrentProductToCart', mallId, time, appKey, memberId, hm
 ```
 
 실패는 전부 `reject` 로 온다. `.catch()` 하나만 달면 되고 `try/catch` 는 필요 없다.
+단, **`addCart` 는 예외다** — 실패를 성공 응답에 실어 보낸다. 장바구니는 `FRONT.cart.add()` 를 쓴다.
 
-`FRONT.api.sdk.customer()` 도 있지만 **회원 정보는 `FRONT.member.fetch()` 를 쓴다.**
-`sdk.customer()` 는 캐시도 재시도도 없는 날것이라, 로그인 직후 `member_id` 가
-아직 안 채워진 타이밍에 비회원으로 보인다.
+회원 정보는 `call('getCustomerInfo')` 대신 `FRONT.member.fetch()` 를 쓴다. 날것으로 부르면
+로그인 직후 `member_id` 가 아직 안 채워진 타이밍에 비회원으로 보인다.
 
 ## FRONT.cache
 
@@ -225,13 +228,29 @@ FRONT.api.sdk.call('addCurrentProductToCart', mallId, time, appKey, memberId, hm
 바뀐 것만 다시 그린다.** 저장은 `sessionStorage` — 목록 → 상세 → 뒤로가기를 넘어 살아남고,
 새 탭은 비어 있다.
 
+목록 화면은 `load()` 하나로 쓴다. 스켈레톤 → 조회 → 그리기 → 실패 처리를 묶었고,
+늦게 온 응답과 실패는 `isValid` 로 거른다.
+
+```js
+const key = 'products:' + JSON.stringify(params);
+
+FRONT.cache.load(key, () => FRONT.api.middleware.get('/api/v1/products', params).then((r) => r.data), {
+  ttl: 30000,                                    // 이 시간이 지났으면 뒤에서 새로 받는다
+  render,                                        // 첫 그리기 + 바뀌었을 때 다시 그리기. 이름 있는 함수로
+  skeleton: () => $list.html(FRONT.util.skeleton(8, 'card-skeleton', BLOCKS)),   // 그릴 캐시가 없을 때만
+  onError: (err) => { $list.html(errorHtml()); FRONT.util.logError('상품목록', err); },
+  isValid: () => key === 'products:' + JSON.stringify(params),   // 지금 조건과 같을 때만 그린다
+});
+```
+
+`load` 가 맞지 않는 화면(첫 그리기와 다시 그리기가 다른 경우 등)은 아래 `get` · `has` 로 직접 짠다.
+그때는 **`isValid` 가 재검증에만 불린다**는 점을 챙긴다 — 캐시가 없는 첫 조회는 `get().then` 으로
+바로 오므로 거기서 한 번 더 확인해야 한다.
+
 ```js
 if (!FRONT.cache.has(KEY)) $list.html(FRONT.util.skeleton(8, 'card-skeleton', BLOCKS));
 
-FRONT.cache.get(KEY, () => FRONT.api.middleware.get('/api/v1/products').then((r) => r.data), {
-  ttl: 30000,                          // 이 시간이 지났으면 뒤에서 새로 받는다
-  onRevalidate: render,                // 이름 있는 함수로 — 아래 주의 참고
-}).then(render);
+FRONT.cache.get(KEY, fetcher, { ttl: 30000, onRevalidate: render }).then(render);
 ```
 
 | 옵션 | |
@@ -241,6 +260,7 @@ FRONT.cache.get(KEY, () => FRONT.api.middleware.get('/api/v1/products').then((r)
 | `onRevalidate(fresh)` | 새로 받은 내용이 **캐시와 다를 때만** 불린다 |
 | `isValid()` | 늦게 온 응답을 버릴 조건. 페이지를 넘겼는데 이전 응답이 도착하는 경우 |
 | `ignore` | 비교에서 뺄 필드명 배열. 조회수처럼 매번 올라가는 값 |
+| `render` · `skeleton` · `onError` | `load()` 전용. `onError` 가 없으면 reject 를 그대로 올린다 |
 
 ```js
 FRONT.cache.has(key, maxAge)  // 지금 그릴 수 있는 값이 있나 (스켈레톤 판단용)
@@ -254,7 +274,8 @@ FRONT.cache.revalidateAll()   // 보통 직접 부를 일 없다 (아래 참고)
 
 **탭에 돌아오면 저절로 다시 확인한다.** `visibilitychange` · `focus` · `online` ·
 `pageshow(bfcache)` 에서 화면에 살아 있는 조회만 다시 받는다. 앱을 바꿨다 10분 뒤
-돌아와도 옛 화면이 남지 않는다.
+돌아와도 옛 화면이 남지 않는다. 끊긴 채 첫 조회가 실패해 비어 있던 자리도 `online` 때 채운다.
+이벤트가 겹쳐 와도 요청은 키당 하나, 그리기는 응답당 한 번이다.
 
 ### 주의
 
@@ -263,6 +284,7 @@ FRONT.cache.revalidateAll()   // 보통 직접 부를 일 없다 (아래 참고)
 - 그 콜백이 이전 DOM을 부수고 새로 만든다면(슬라이드 teardown → rebuild) `isValid` 를
   같이 준다
 - 같은 키로 동시에 들어온 요청은 하나로 합쳐진다(`inflight`)
+- `clear(key)` 는 나가 있는 요청도 놓는다. 돌아와도 캐시에 쓰지 않아, 지운 값(관심상품 해제 등)이 되살아나지 않는다
 - `onRevalidate` 함수 자체가 "화면의 이 자리"를 가리키는 열쇠다. **이름 있는 함수를 넘긴다.**
   매번 새 익명 함수를 넘기면서 같은 자리를 반복 갱신하면 등록이 쌓이고, 탭에 돌아올 때마다
   유령 등록까지 다시 받는다. 자리마다 다른 클로저가 필요하면 `isValid` 를 같이 준다
@@ -297,12 +319,27 @@ FRONT.member.clear()   // 직접 부를 일은 드물다 (아래)
 다만 3번은 **캐시를 먼저 돌려준 뒤** 확인하므로, 회원 전용 값을 그리는 화면이라면
 잠깐 이전 회원으로 보일 수 있다. 그런 화면은 확인 후 다시 그리도록 짠다.
 
-## FRONT.category
+## FRONT.cart
+
+SDK `addCart` 로 담는다. 앱에 개인화정보 쓰기(`mall.write_personal`) 권한이 있어야 한다.
 
 ```js
-FRONT.category.list(115)                    // 하위 카테고리 목록. parentNo별 캐시
-FRONT.category.findByName('브랜드명', 115)   // 이름 일치. 없으면 null
+FRONT.cart.add(selected, {
+  toItem: (p) => ({ product_no: Number(p.productNo), variants_code: p.variantsCode, quantity: 1 }),
+  basketType: 'A0000',   // A0000 일반 / A0001 무이자
+  prepaid: 'P',          // P 선불 / C 착불 — 상품 설정과 다르면 422
+}).then((results) => {
+  const failed = results.filter((r) => !r.ok);     // r.item 은 selected 의 원소, r.err 는 Error
+  if (!failed.length) return (location.href = FRONT.util.url('/order/basket.html'));
+  FRONT.util.toast(failed[0].err.bundle ? '세트상품은 상세에서 담아주세요' : failed[0].err.message, { type: 'error' });
+});
 ```
+
+- **한 개씩 순서대로** 보내고 결과를 모은다. 묶어 보내면 하나가 거절될 때 묶음이 통째로 떨어진다
+- **reject 하지 않는다.** 결과의 `ok` 를 본다. 재시도도 없다 — 같은 상품이 두 번 담길 수 있다
+- `err.bundle` — 세트상품. 프론트 `addCart` 가 받지 않는다(상품 상세에서만 담긴다)
+- `FRONT.api.sdk.init()` 은 안에서 부른다
+- 옵션 고르기, 중복 클릭 막기, 담은 뒤 카운트·레이어는 호출부 몫이다
 
 ## FRONT.util
 
@@ -310,9 +347,11 @@ FRONT.category.findByName('브랜드명', 115)   // 이름 일치. 없으면 nul
 formatNumber(1000)                  // '1,000'
 formatDate('2026-08-04T12:00:00')   // '2026.08.04'
 escapeHtml(v)                       // html 넣기 전 필수
-listToHtml('a, b', 'opt')           // '<p class="opt">a<br>b</p>'
 query('cate_no')                    // 주소의 ?cate_no 값
 url('/pages/list.html')             // config.SKIN_BASE 접두사를 붙인다
+parseDate('2026-08-16 15:29:36')    // ms. 사파리도 읽는다. new Date(s) 를 직접 쓰지 않는다
+img(url, alt, 'thumb', ' loading="lazy"')   // url 이 비면 투명 1px + is-noimg
+BLANK_IMG                           // 템플릿 <img> 에 직접 넣을 빈 이미지
 
 cookie.get / set / remove / getJSON / setJSON
 
@@ -338,11 +377,43 @@ afterReady(fn)                   // ready 배치가 전부 끝난 뒤에 실행
 ### 자주 쓰는 조합
 
 ```js
-// 요청을 한 번만 보내기 (FRONT.category.list 는 이미 이걸로 캐시된다)
+// 요청을 한 번만 보내기
 const loadBanners = FRONT.util.once(() => FRONT.api.middleware.get('/api/v1/banners'));
 
 // 사용자 입력을 html로
 $el.html(FRONT.util.escapeHtml(userInput));
+```
+
+### 코어에 넣지 않은 것
+
+몰마다 마크업이나 규칙이 달라서 코어가 정하면 우회하게 되는 것들이다. 필요하면 페이지 파일에 복사한다.
+
+**페이지네이션** — 스킨마다 `.ec-base-paginate` 안 마크업(글자/이미지 버튼, 페이지 묶음)이 다르다.
+
+```js
+function pagerHtml(page, totalPage) {
+  page = Number(page);
+  if (!(totalPage > 1)) return '';
+  const link = (n, text, cls) => '<a href="#none" data-page="' + n + '"' + (cls ? ' class="' + cls + '"' : '') + '>' + text + '</a>';
+  let nums = '';
+  for (let n = 1; n <= totalPage; n++) nums += '<li>' + link(n, n, n === page ? 'this' : 'other') + '</li>';
+  return link(1, '첫 페이지', 'first') + link(Math.max(1, page - 1), '이전 페이지') +
+    '<ol>' + nums + '</ol>' +
+    link(Math.min(totalPage, page + 1), '다음 페이지') + link(totalPage, '마지막 페이지', 'last');
+}
+
+$root.on('click', '.ec-base-paginate a[data-page]', function (e) {
+  e.preventDefault();
+  load(Number($(this).data('page')));   // 스크롤 · 주소 갱신은 화면마다
+});
+```
+
+**하위 카테고리 조회** — 프론트 API 한 줄이다. 여러 곳에서 쓰면 `once` 로 감싼다.
+
+```js
+const subCategories = FRONT.util.once(() =>
+  FRONT.api.front.get('/api/v2/categories', { parent_category_no: 115, limit: 100 })
+    .then((res) => res.data?.categories || []));
 ```
 
 ## FRONT.page
@@ -354,6 +425,8 @@ FRONT.page(() => 조건, fn)         // 조건이 참일 때만
 ```
 
 한 개가 예외를 던져도 나머지는 계속 실행된다. 에러는 콘솔에 찍힌다.
+단 **예외가 난 그 콜백은 그 자리에서 멈춘다.** 흔한 원인은 콜백 안에서 아래쪽에 선언한
+`const` · `let` 을 먼저 쓰는 것이다(TDZ `ReferenceError`). 화면 일부가 조용히 안 그려지면 콘솔부터 본다.
 
 ---
 
@@ -385,6 +458,12 @@ FRONT.page(() => 조건, fn)         // 조건이 참일 때만
 `FRONT.member` 가 잡는 경로 세 가지를 다 비껴간 경우다. 그 스킨의 로그아웃이
 폼 제출이고 주소에 `logout` 도 없으면, 로그아웃 처리 쪽에서 `FRONT.member.clear()` 를
 한 번 불러준다.
+
+**아이폰(사파리)에서만 날짜 · 카운트다운이 비거나 NaN**
+`new Date('2026-08-16 15:29:36')` 을 사파리가 못 읽는다. `FRONT.util.parseDate()` 로 바꾼다.
+
+**장바구니로 넘어갔는데 상품이 안 담김**
+`sdk.call('addCart')` 를 직접 불렀다. `addCart` 는 실패도 성공 응답으로 온다 — `FRONT.cart.add()` 를 쓰고 `ok` 를 본다.
 
 **아무 로그도 안 보임**
 주소 뒤에 `?debug=1` 을 붙이면 `FRONT.util.log()` 출력이 켜진다.
