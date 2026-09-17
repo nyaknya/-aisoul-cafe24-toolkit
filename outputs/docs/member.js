@@ -49,8 +49,7 @@ window.FRONT = window.FRONT || {};
   //   { ready: true, guest: true }  SDK가 Error(403) → 비회원 확정. 재시도 대상 아님
   //   { ready: true, customer }     로그인. member_id가 비어 있으면 재시도 대상
   //
-  // FRONT.api.sdk.customer() 를 쓰지 못하는 이유가 이것이다.
-  // 그쪽은 세 경우를 전부 null로 뭉갠다.
+  // 셋을 null 하나로 뭉개면 안 된다 — 'SDK가 아직 없음'을 비회원으로 캐시하게 된다.
   const getCustomer = () => {
     if (typeof CAFE24API === 'undefined') return Promise.resolve({ ready: false });
 

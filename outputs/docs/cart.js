@@ -30,15 +30,14 @@ window.FRONT = window.FRONT || {};
 
   // item 은 호출부의 원래 객체다. 결과에 그대로 돌려줘야 상품명 등으로 실패를 짚을 수 있다
   // toItem 이 던져도(필드 누락 등) 그 상품만 실패로 남긴다
-  const addOne = (item, toItem, basketType, prepaid) =>
-    Promise.resolve()
-      .then(() => FRONT.api.sdk.call('addCart', basketType, prepaid, [toItem(item)]))
-      .then((res) => {
-        const err = toError(res);
-        if (err) throw err;
-        return { item, ok: true };
-      })
-      .catch((err) => ({ item, ok: false, err }));
+  const addOne = async (item, toItem, basketType, prepaid) => {
+    try {
+      const err = toError(await FRONT.api.sdk.call('addCart', basketType, prepaid, [toItem(item)]));
+      return err ? { item, ok: false, err } : { item, ok: true };
+    } catch (err) {
+      return { item, ok: false, err };
+    }
+  };
 
   FRONT.cart = {
     /* 한 개씩 순서대로 담고 [{ item, ok, err }] 를 준다. reject 하지 않는다.
@@ -53,14 +52,12 @@ window.FRONT = window.FRONT || {};
        toItem      호출부 객체 → SDK 형식. 없으면 이미 SDK 형식이라고 본다
        basketType  A0000 일반 / A0001 무이자
        prepaid     P 선불 / C 착불 — 상품 설정과 다르면 422 */
-    add(items, { toItem = (x) => x, basketType = 'A0000', prepaid = 'P' } = {}) {
-      // SDK 초기화 실패는 여기서 삼킨다 — 각 상품의 addCart 가 실패로 받아 결과에 남긴다
-      const start = Promise.resolve().then(() => FRONT.api.sdk.init()).catch(() => {}).then(() => []);
-      return [].concat(items || []).reduce(
-        (chain, item) => chain.then((acc) =>
-          addOne(item, toItem, basketType, prepaid).then((r) => { acc.push(r); return acc; })),
-        start,
-      );
+    async add(items, { toItem = (x) => x, basketType = 'A0000', prepaid = 'P' } = {}) {
+      const results = [];
+      for (const item of [].concat(items || [])) {
+        results.push(await addOne(item, toItem, basketType, prepaid));
+      }
+      return results;
     },
   };
 })();

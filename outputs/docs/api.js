@@ -82,10 +82,10 @@ window.FRONT = window.FRONT || {};
           }
           cfg.__retried = true;
 
-          // 이 요청이 나간 뒤 토큰이 이미 바뀌었다 = 앞선 갱신이 끝났다. 새 토큰으로 다시 보내기만 한다.
-          // refreshing 은 갱신이 끝나면 비워지므로 그것만으로는 합쳐지지 않는다 — 옛 토큰으로 나갔던
-          // 느린 요청의 401 이 뒤늦게 오면 이미 쓴 refreshToken 으로 갱신이 한 번 더 나간다
-          if (!refreshing && cfg.__token !== resolve(auth)) return inst.request(cfg);
+          // 이 요청이 나간 뒤 토큰이 바뀌었다 = 누군가 이미 갱신했다. 새 토큰으로 다시 보내기만 한다.
+          // refreshing 만으로는 부족하다 — 갱신이 끝나면 비워지므로, 옛 토큰으로 나갔던 느린 요청의
+          // 401 이 뒤늦게 오면 이미 쓴 refreshToken 으로 갱신이 한 번 더 나간다
+          if (cfg.__token !== resolve(auth)) return inst.request(cfg);
 
           if (!refreshing) {
             refreshing = onUnauthorized();
@@ -183,12 +183,15 @@ window.FRONT = window.FRONT || {};
   // 실패는 전부 reject로 통일한다. 일부는 throw, 일부는 reject로 나가면
   // 호출부가 try/catch와 .catch()를 둘 다 써야 하고, 하나를 빠뜨리면
   // FRONT.page의 try/catch가 삼켜서 "처리된 것처럼 보이는" 실패가 된다.
+  let sdkInit = null;   // CAFE24API.init 결과
+
   api.sdk = {
-    // SDK를 client_id로 초기화한다. 쓰기 전에 한 번 부른다.
+    // SDK를 client_id로 초기화한다. 페이지당 한 번이면 되고, call() 이 처음 불릴 때 알아서 부른다.
+    // 호출부마다 "쓰기 전에 init" 을 챙기게 하면 빠뜨린 곳(회원 조회 등)만 조용히 실패한다.
     // 이건 Promise를 돌려주지 않으므로 throw가 맞다
     init() {
       if (typeof CAFE24API === 'undefined') throw noSdk();
-      return CAFE24API.init({ client_id: FRONT.config.CLIENT_ID });
+      return sdkInit || (sdkInit = CAFE24API.init({ client_id: FRONT.config.CLIENT_ID }));
     },
 
     // 마지막 인자가 콜백인 SDK 메서드는 전부 이걸로 부른다
@@ -198,6 +201,7 @@ window.FRONT = window.FRONT || {};
       if (typeof CAFE24API[method] !== 'function') {
         return Promise.reject(new Error(`[FRONT.api.sdk] CAFE24API.${method}() 가 없습니다.`));
       }
+      try { api.sdk.init(); } catch (e) { return Promise.reject(e); }
       return FRONT.util.toPromise((cb) => CAFE24API[method](...args, cb));
     },
 

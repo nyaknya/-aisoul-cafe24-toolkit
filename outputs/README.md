@@ -208,7 +208,7 @@ const custom = FRONT.api.create({
 카페24 SDK는 전부 콜백 방식이다. 이걸 Promise로 감싼 것.
 
 ```js
-FRONT.api.sdk.init()          // 쓰기 전에 한 번
+FRONT.api.sdk.init()          // call() 이 처음 불릴 때 알아서 한 번 부른다. 직접 부를 일은 드물다
 FRONT.api.sdk.cartCount()
 FRONT.api.sdk.couponCount()
 
@@ -338,7 +338,6 @@ FRONT.cart.add(selected, {
 - **한 개씩 순서대로** 보내고 결과를 모은다. 묶어 보내면 하나가 거절될 때 묶음이 통째로 떨어진다
 - **reject 하지 않는다.** 결과의 `ok` 를 본다. 재시도도 없다 — 같은 상품이 두 번 담길 수 있다
 - `err.bundle` — 세트상품. 프론트 `addCart` 가 받지 않는다(상품 상세에서만 담긴다)
-- `FRONT.api.sdk.init()` 은 안에서 부른다
 - 옵션 고르기, 중복 클릭 막기, 담은 뒤 카운트·레이어는 호출부 몫이다
 
 ## FRONT.util

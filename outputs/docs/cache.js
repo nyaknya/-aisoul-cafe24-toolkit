@@ -76,6 +76,10 @@ window.FRONT = window.FRONT || {};
   // get(무엇을 그릴까)과 has(스켈레톤을 띄울까)가 같은 기준을 써야 한다 — 한 곳에만 둔다
   const isExpired = (entry, maxAge) => !!maxAge && Date.now() - entry.time >= maxAge;
 
+  // get(뒤에서 새로 받을까)과 revalidateAll(탭 복귀 때 받을까)의 기준. 역시 한 곳에만 둔다.
+  // isExpired 와 달리 0 은 '항상 오래됨'이다
+  const isStale = (entry, ttl) => Date.now() - entry.time >= ttl;
+
   // 바뀌었는지 비교할 때 쓸 지문. ignore에 준 이름은 깊이 상관없이 빼고 본다.
   // 요청할 때마다 값이 달라지는 필드(조회수처럼 우리 조회로 값이 올라가는 것)가
   // 섞여 있으면, 내용이 그대로인데도 매번 다시 그리게 된다
@@ -161,7 +165,7 @@ window.FRONT = window.FRONT || {};
         return awaited().catch(() => entry.data);
       }
 
-      if (Date.now() - entry.time >= ttl) revalidate(key, fetcher, entry, o);
+      if (isStale(entry, ttl)) revalidate(key, fetcher, entry, o);
       return Promise.resolve(entry.data);
     },
 
@@ -175,13 +179,12 @@ window.FRONT = window.FRONT || {};
        여기선 성공·재검증·실패 모두 isValid 를 거친다.
        render 는 onRevalidate 로도 쓰이므로 이름 있는 함수로 넘긴다(get 의 주의와 같다).
        onError 가 없으면 reject 를 그대로 올린다 */
-    load(key, fetcher, { render, skeleton, onError, ...opts }) {
-      const current = () => !opts.isValid || opts.isValid();
+    load(key, fetcher, { render, skeleton, onError, isValid = () => true, ...opts }) {
       if (skeleton && !cache.has(key, opts.maxAge)) skeleton();
-      return cache.get(key, fetcher, { ...opts, onRevalidate: render })
-        .then((data) => { if (current()) render(data); })
+      return cache.get(key, fetcher, { ...opts, isValid, onRevalidate: render })
+        .then((data) => { if (isValid()) render(data); })
         .catch((err) => {
-          if (!current()) return;
+          if (!isValid()) return;
           if (!onError) throw err;
           onError(err);
         });
@@ -198,7 +201,7 @@ window.FRONT = window.FRONT || {};
         // 호출부가 '아직 이 화면이 맞나'를 판단할 수 있으면 존중한다
         if (opts.isValid && !opts.isValid()) return;
         const entry = readEntry(key);
-        if (entry && Date.now() - entry.time < opts.ttl) return;
+        if (entry && !isStale(entry, opts.ttl)) return;
         n++;
         revalidate(key, fetcher, entry, opts);
       });

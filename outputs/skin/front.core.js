@@ -269,9 +269,9 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
             return Promise.reject(err);
           }
           cfg.__retried = true;
-          // 이 요청이 나간 뒤 토큰이 이미 바뀌었다 = 갱신이 먼저 끝났다. 새 토큰으로 다시 보내기만 한다.
+          // 이 요청이 나간 뒤 토큰이 바뀌었다 = 누군가 이미 갱신했다. 새 토큰으로 다시 보내기만 한다.
           // 늦게 온 401 마다 갱신을 또 부르면 이미 쓴 refreshToken 으로 나간다
-          if (!refreshing && cfg.__token !== resolve(auth)) return inst.request(cfg);
+          if (cfg.__token !== resolve(auth)) return inst.request(cfg);
           if (!refreshing) {
             refreshing = onUnauthorized();
             // 끝나면 놓아준다. 성공·실패 둘 다 여기서 받아야 다음 401이 다시 갱신할 수 있다
@@ -333,11 +333,13 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
   const noSdk = () =>
     new Error('[FRONT.api.sdk] CAFE24API가 없습니다. 카페24 앱 스크립트가 로드됐는지 확인하세요.');
 
+  let sdkInit = null;   // CAFE24API.init 결과. 페이지당 한 번이면 된다
+
   api.sdk = {
-    // 쓰기 전에 한 번 부른다
+    // call() 이 처음 불릴 때 알아서 부른다. 직접 부를 일은 드물다
     init() {
       if (typeof CAFE24API === 'undefined') throw noSdk();
-      return CAFE24API.init({ client_id: FRONT.config.CLIENT_ID });
+      return sdkInit || (sdkInit = CAFE24API.init({ client_id: FRONT.config.CLIENT_ID }));
     },
 
     // 마지막 인자가 콜백인 SDK 메서드는 전부 이걸로 부른다
@@ -348,6 +350,7 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
       if (typeof CAFE24API[method] !== 'function') {
         return Promise.reject(new Error(`[FRONT.api.sdk] CAFE24API.${method}() 가 없습니다.`));
       }
+      try { api.sdk.init(); } catch (e) { return Promise.reject(e); }
       return FRONT.util.toPromise((cb) => CAFE24API[method](...args, cb));
     },
 
@@ -402,6 +405,10 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
 
   // get(무엇을 그릴까)과 has(스켈레톤을 띄울까)가 같은 기준을 써야 한다 — 한 곳에만 둔다
   const isExpired = (entry, maxAge) => !!maxAge && Date.now() - entry.time >= maxAge;
+
+  // get(뒤에서 새로 받을까)과 revalidateAll(탭 복귀 때 받을까)의 기준. 역시 한 곳에만 둔다.
+  // isExpired 와 달리 0 은 '항상 오래됨'이다
+  const isStale = (entry, ttl) => Date.now() - entry.time >= ttl;
 
   // 바뀌었는지 비교할 때 쓸 지문. ignore에 준 이름은 깊이 상관없이 빼고 본다.
   // 요청할 때마다 값이 달라지는 필드(조회수처럼 우리 조회로 값이 올라가는 것)가
@@ -488,7 +495,7 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
         return awaited().catch(() => entry.data);
       }
 
-      if (Date.now() - entry.time >= ttl) revalidate(key, fetcher, entry, o);
+      if (isStale(entry, ttl)) revalidate(key, fetcher, entry, o);
       return Promise.resolve(entry.data);
     },
 
@@ -502,13 +509,12 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
        여기선 성공·재검증·실패 모두 isValid 를 거친다.
        render 는 onRevalidate 로도 쓰이므로 이름 있는 함수로 넘긴다(get 의 주의와 같다).
        onError 가 없으면 reject 를 그대로 올린다 */
-    load(key, fetcher, { render, skeleton, onError, ...opts }) {
-      const current = () => !opts.isValid || opts.isValid();
+    load(key, fetcher, { render, skeleton, onError, isValid = () => true, ...opts }) {
       if (skeleton && !cache.has(key, opts.maxAge)) skeleton();
-      return cache.get(key, fetcher, { ...opts, onRevalidate: render })
-        .then((data) => { if (current()) render(data); })
+      return cache.get(key, fetcher, { ...opts, isValid, onRevalidate: render })
+        .then((data) => { if (isValid()) render(data); })
         .catch((err) => {
-          if (!current()) return;
+          if (!isValid()) return;
           if (!onError) throw err;
           onError(err);
         });
@@ -525,7 +531,7 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
         // 호출부가 '아직 이 화면이 맞나'를 판단할 수 있으면 존중한다
         if (opts.isValid && !opts.isValid()) return;
         const entry = readEntry(key);
-        if (entry && Date.now() - entry.time < opts.ttl) return;
+        if (entry && !isStale(entry, opts.ttl)) return;
         n++;
         revalidate(key, fetcher, entry, opts);
       });
@@ -754,15 +760,14 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
 
   // item 은 호출부의 원래 객체다. 결과에 그대로 돌려줘야 상품명 등으로 실패를 짚을 수 있다
   // toItem 이 던져도(필드 누락 등) 그 상품만 실패로 남긴다
-  const addOne = (item, toItem, basketType, prepaid) =>
-    Promise.resolve()
-      .then(() => FRONT.api.sdk.call('addCart', basketType, prepaid, [toItem(item)]))
-      .then((res) => {
-        const err = toError(res);
-        if (err) throw err;
-        return { item, ok: true };
-      })
-      .catch((err) => ({ item, ok: false, err }));
+  const addOne = async (item, toItem, basketType, prepaid) => {
+    try {
+      const err = toError(await FRONT.api.sdk.call('addCart', basketType, prepaid, [toItem(item)]));
+      return err ? { item, ok: false, err } : { item, ok: true };
+    } catch (err) {
+      return { item, ok: false, err };
+    }
+  };
 
   FRONT.cart = {
     /* 한 개씩 순서대로 담고 [{ item, ok, err }] 를 준다. reject 하지 않는다.
@@ -777,14 +782,12 @@ FRONT.page = FRONT.page || function () { (FRONT._q = FRONT._q || []).push(argume
        toItem      호출부 객체 → SDK 형식. 없으면 이미 SDK 형식이라고 본다
        basketType  A0000 일반 / A0001 무이자
        prepaid     P 선불 / C 착불 — 상품 설정과 다르면 422 */
-    add(items, { toItem = (x) => x, basketType = 'A0000', prepaid = 'P' } = {}) {
-      // SDK 초기화 실패는 여기서 삼킨다 — 각 상품의 addCart 가 실패로 받아 결과에 남긴다
-      const start = Promise.resolve().then(() => FRONT.api.sdk.init()).catch(() => {}).then(() => []);
-      return [].concat(items || []).reduce(
-        (chain, item) => chain.then((acc) =>
-          addOne(item, toItem, basketType, prepaid).then((r) => { acc.push(r); return acc; })),
-        start,
-      );
+    async add(items, { toItem = (x) => x, basketType = 'A0000', prepaid = 'P' } = {}) {
+      const results = [];
+      for (const item of [].concat(items || [])) {
+        results.push(await addOne(item, toItem, basketType, prepaid));
+      }
+      return results;
     },
   };
 })();
