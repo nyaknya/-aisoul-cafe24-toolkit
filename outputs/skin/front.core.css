@@ -1,0 +1,112 @@
+/* ===================================================================
+   front.core.css — front.core.js 가 그리는 것들의 최소 모양
+
+   FRONT.util.toast() 와 FRONT.util.skeleton() 은 이 파일이 없으면
+   마크업만 붙고 화면에는 아무것도 안 보인다. 코어와 같이 올린다.
+
+   색은 몰 변수를 먼저 쓰고 없으면 기본값으로 떨어진다.
+   모양을 바꾸고 싶으면 이 파일이 아니라 몰 CSS 에서 덮어쓴다.
+=================================================================== */
+
+/* --- 스켈레톤 (FRONT.util.skeleton) ---------------------------------
+   자리 크기(높이·너비·배치)는 몰 CSS 에서 정한다. 여기 있는 건 '반짝임'뿐이다.
+     .skeleton-block.img { height: 180px; }   ← 몰 CSS
+------------------------------------------------------------------- */
+
+.skeleton-block {
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--gray-1, #f2f2f2) 25%,
+    var(--gray-2, #e4e4e4) 50%,
+    var(--gray-1, #f2f2f2) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* 글자 자리에 그대로 끼우는 변형. 숫자가 들어올 칸에 '0' 이 먼저 보이는 걸 막는다 */
+.skeleton-inline {
+  display: inline-block;
+  width: 4em;
+  height: 1em;
+  vertical-align: middle;
+}
+
+/* 어두운 바탕 위에서는 회색 대신 반투명 흰색으로 반짝인다 */
+.skeleton-block.on-dark {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.08) 25%,
+    rgba(255, 255, 255, 0.2) 50%,
+    rgba(255, 255, 255, 0.08) 75%
+  );
+  background-size: 200% 100%;
+}
+
+/* 애니메이션을 꺼달라고 한 사용자에게는 반짝임 없이 자리만 보여준다 */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-block {
+    animation: none;
+    background: var(--gray-1, #f2f2f2);
+  }
+  .skeleton-block.on-dark {
+    background: rgba(255, 255, 255, 0.12);
+  }
+}
+
+/* --- 토스트 (FRONT.util.toast) --------------------------------------
+   body 직속으로 붙는다. 하단 고정 내비가 있는 몰이면 z-index 와 bottom 을
+   몰 CSS 에서 올린다 (예: @media (max-width: 768px) { .front-toast { bottom: 90px; } })
+------------------------------------------------------------------- */
+
+.front-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 40px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  padding: 12px 20px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 150%;
+  letter-spacing: -0.28px;
+  color: #fff;
+  background: rgba(33, 33, 33, 0.9);
+  /* 뜨기 전 상태. is-visible 이 붙으면 올라오면서 나타난다 */
+  transform: translate(-50%, 8px);
+  opacity: 0;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  /* 화면을 가리기만 하고 클릭은 아래로 통과시킨다 */
+  pointer-events: none;
+}
+
+.front-toast.is-visible {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+
+.front-toast > svg {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+}
+
+/* circle 이 상태색, 안쪽 path 는 흰색(코어가 인라인 stroke 로 박는다) */
+.front-toast--success > svg circle { fill: #22c55e; }
+.front-toast--error > svg circle { fill: #ef4444; }
+.front-toast--info > svg circle { fill: #767676; }
+
+.front-toast > span {
+  min-width: 0;
+  word-break: keep-all;
+}
